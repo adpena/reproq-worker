@@ -32,7 +32,7 @@ func main() {
 
 	var wg sync.WaitGroup
 	batchSize := 100
-	
+
 	for i := 0; i < *count; i += batchSize {
 		wg.Add(1)
 		go func(start int) {
@@ -40,10 +40,11 @@ func main() {
 			for j := start; j < start+batchSize && j < *count; j++ {
 				spec := fmt.Sprintf(`{"task_path": "test.task", "args": [%d]}`, j)
 				hash := fmt.Sprintf("%064d", j)
-				_, err := pool.Exec(ctx, "
+				query := `
 					INSERT INTO task_runs (spec_hash, queue_name, spec_json, status)
 					VALUES ($1, 'default', $2, 'READY')
-				")
+				`
+				_, err := pool.Exec(ctx, query, hash, spec)
 				if err != nil {
 					fmt.Printf("Insert error: %v\n", err)
 				}
