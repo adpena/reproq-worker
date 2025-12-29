@@ -18,16 +18,35 @@ type Result struct {
 	ErrorJSON   json.RawMessage `json:"error_json,omitempty"`
 }
 
+// limitedBuffer is a simple wrapper around bytes.Buffer that caps the total size.
+type limitedBuffer struct {
+	bytes.Buffer
+	cap int
+}
+
+func (l *limitedBuffer) Write(p []byte) (n int, err error) {
+	left := l.cap - l.Len()
+	if left <= 0 {
+		return len(p), nil // Drop the data but report success to the caller
+	}
+	if len(p) > left {
+		p = p[:left]
+	}
+	return l.Buffer.Write(p)
+}
+
 // Executor handles the execution of external task processes.
 type Executor struct {
 	// BaseCommand is the initial command to run, e.g., ["python", "-m", "myproject.task_executor"]
 	BaseCommand []string
+	MaxLogSize  int // Maximum bytes to capture for stdout/stderr
 }
 
 // New creates a new Executor.
 func New(baseCommand []string) *Executor {
 	return &Executor{
 		BaseCommand: baseCommand,
+		MaxLogSize:  1024 * 1024, // 1MB default
 	}
 }
 
@@ -37,21 +56,15 @@ func (e *Executor) Execute(ctx context.Context, payload json.RawMessage, timeout
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Prepare the command arguments
-	// We assume the interface is: python -m ... --payload <json_string>
-	// or passing via stdin. Passing large JSON via arg can hit shell limits.
-	// For this implementation, let's assume passing via a flag for simplicity, 
-	// but production might prefer stdin or a temp file.
-	// Let's go with passing as a string argument for now, based on "payload-json" requirement.
-	
 	args := append([]string{}, e.BaseCommand...)
 	args = append(args, "--payload", string(payload))
 
 	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf := &limitedBuffer{cap: e.MaxLogSize}
+	stderrBuf := &limitedBuffer{cap: e.MaxLogSize}
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	// Run the command
 	err := cmd.Run()
