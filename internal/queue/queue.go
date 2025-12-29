@@ -113,13 +113,13 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 	// 1. Finalize the task
 	query := `
 		UPDATE task_runs
-		SET status = 'SUCCESSFUL'::task_status_mvp,
+		SET status = 'SUCCESSFUL',
 		    finished_at = NOW(),
 		    return_json = $1,
 		    leased_until = NULL,
 		    leased_by = NULL,
 		    updated_at = NOW()
-		WHERE result_id = $2 AND leased_by = $3 AND status = 'RUNNING'::task_status_mvp
+		WHERE result_id = $2 AND leased_by = $3 AND status = 'RUNNING'
 	`
 	res, err := tx.Exec(ctx, query, returnJSON, resultID, workerID)
 	if err != nil {
@@ -146,11 +146,11 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 		UPDATE task_runs
 		SET wait_count = wait_count - 1,
 		    status = CASE
-				WHEN wait_count - 1 <= 0 THEN 'READY'::task_status_mvp
-				ELSE 'WAITING'::task_status_mvp
+				WHEN wait_count - 1 <= 0 THEN 'READY'
+				ELSE 'WAITING'
 			END,
 		    updated_at = NOW()
-		WHERE parent_id = $1 AND status = 'WAITING'::task_status_mvp
+		WHERE parent_id = $1 AND status = 'WAITING'
 	`
 	_, err = tx.Exec(ctx, triggerQuery, resultID)
 	if err != nil {
@@ -169,15 +169,15 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 
 	query := `
 		UPDATE task_runs
-		SET status = $1::task_status_mvp,
-		    finished_at = CASE WHEN $1::task_status_mvp = 'FAILED'::task_status_mvp THEN NOW() ELSE NULL END,
+		SET status = $1,
+		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    attempts = attempts + 1,
 		    errors_json = errors_json || $2::jsonb,
 		    run_after = $3,
 		    leased_until = NULL,
 		    leased_by = NULL,
 		    updated_at = NOW()
-		WHERE result_id = $4 AND leased_by = $5 AND status = 'RUNNING'::task_status_mvp
+		WHERE result_id = $4 AND leased_by = $5 AND status = 'RUNNING'
 	`
 	// errorObj should be a single object, we wrap it in a list for the append if it's not already
 	res, err := s.pool.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID)
