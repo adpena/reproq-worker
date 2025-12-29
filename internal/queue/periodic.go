@@ -24,6 +24,14 @@ type PeriodicTask struct {
 	Enabled     bool            `db:"enabled"`
 }
 
+type periodicSpec struct {
+	TaskPath     string          `json:"task_path"`
+	Args         json.RawMessage `json:"args"`
+	Kwargs       map[string]any  `json:"kwargs"`
+	PeriodicName string          `json:"periodic_name"`
+	ScheduledAt  string          `json:"scheduled_at"`
+}
+
 // EnqueueDuePeriodicTasks finds tasks where next_run_at <= now, enqueues them, and schedules the next run.
 func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -63,24 +71,99 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 
 	for _, t := range dueTasks {
 		// 2. Enqueue the task
-		// We need to calculate a spec_hash. For periodic tasks, we can use name + next_run_at to avoid duplicates if beat runs twice.
-		specJSON := fmt.Sprintf(`{"task_path": "%s", "args": %s, "kwargs": {}, "periodic_name": "%s", "scheduled_at": "%s"}`,
-			t.TaskPath, string(t.PayloadJSON), t.Name, t.NextRunAt.Format(time.RFC3339))
-
-		// Use a simple hash approach or reuse existing logic if accessible.
-		// For now, let's just insert.
-
-		specHashBytes := sha256.Sum256([]byte(specJSON))
+		argsJSON := t.PayloadJSON
+		if len(argsJSON) == 0 {
+			argsJSON = json.RawMessage("[]")
+		}
+		spec := periodicSpec{
+			TaskPath:     t.TaskPath,
+			Args:         argsJSON,
+			Kwargs:       map[string]any{},
+			PeriodicName: t.Name,
+			ScheduledAt:  t.NextRunAt.Format(time.RFC3339),
+		}
+		specBytes, err := json.Marshal(spec)
+		if err != nil {
+			return 0, fmt.Errorf("failed to build spec for %s: %w", t.Name, err)
+		}
+		specJSON := string(specBytes)
+		specHashBytes := sha256.Sum256(specBytes)
 		specHash := hex.EncodeToString(specHashBytes[:])
+		queueName := t.QueueName
+		if queueName == "" {
+			queueName = "default"
+		}
+		maxAttempts := t.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 3
+		}
 		insertQuery := `
-			INSERT INTO task_runs (spec_hash, queue_name, spec_json, priority, run_after, attempts, status)
-			SELECT $1::varchar(64), $2::text, $3::jsonb, $4::int, $5::timestamptz, 0, 'READY'
+			WITH params AS (
+				SELECT
+					$1::varchar(64) AS spec_hash,
+					$2::text AS queue_name,
+					$3::jsonb AS spec_json,
+					$4::int AS priority,
+					$5::timestamptz AS run_after,
+					$6::text AS backend_alias,
+					$7::int AS max_attempts,
+					$8::int AS timeout_seconds
+			)
+			INSERT INTO task_runs (
+				backend_alias,
+				queue_name,
+				priority,
+				run_after,
+				spec_json,
+				spec_hash,
+				status,
+				enqueued_at,
+				attempts,
+				max_attempts,
+				timeout_seconds,
+				wait_count,
+				worker_ids,
+				errors_json,
+				cancel_requested,
+				created_at,
+				updated_at
+			)
+			SELECT
+				params.backend_alias,
+				params.queue_name,
+				params.priority,
+				params.run_after,
+				params.spec_json,
+				params.spec_hash,
+				'READY',
+				NOW(),
+				0,
+				params.max_attempts,
+				params.timeout_seconds,
+				0,
+				'[]'::jsonb,
+				'[]'::jsonb,
+				FALSE,
+				NOW(),
+				NOW()
+			FROM params
 			WHERE NOT EXISTS (
 				SELECT 1 FROM task_runs
-				WHERE spec_hash = $1::varchar(64) AND status IN ('READY', 'RUNNING')
+				WHERE spec_hash = params.spec_hash AND status IN ('READY', 'RUNNING')
 			)
 		`
-		_, err = tx.Exec(ctx, insertQuery, specHash, t.QueueName, specJSON, t.Priority, t.NextRunAt)
+		_, err = tx.Exec(
+			ctx,
+			insertQuery,
+			specHash,
+			queueName,
+			specJSON,
+			t.Priority,
+			t.NextRunAt,
+			"default",
+			maxAttempts,
+			900,
+		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to enqueue periodic task %s: %w", t.Name, err)
 		}
