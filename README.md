@@ -101,8 +101,112 @@ if __name__ == "__main__":
 
 The Go worker will invoke this command (configured via `PYTHON_PATH` and hardcoded flags currently, adaptable in `config.go`).
 
-## Development
+## Benchmarking & Load Testing
 
-1.  Start Postgres.
-2.  Run migrations: `cat migrations/*.up.sql | psql $DATABASE_URL`.
-3.  Start the worker.
+
+
+A comprehensive load-testing harness is provided to measure throughput, latency, and correctness.
+
+
+
+### Infrastructure
+
+
+
+The `docker-compose.yml` sets up a tuned Postgres 15 instance and the worker.
+
+
+
+```bash
+
+docker-compose up -d
+
+```
+
+
+
+### Load Generation
+
+
+
+Use the `loadgen` tool to enqueue tasks with various distributions.
+
+
+
+```bash
+
+# Enqueue 100,000 tasks
+
+go run ./cmd/loadgen -tasks 100000 -dsn "postgres://user:pass@localhost:5432/reproq"
+
+```
+
+
+
+Flags:
+
+- `-tasks`: Number of tasks (default 1000)
+
+- `-queues`: Comma-separated queues (default "default,high,low")
+
+- `-priority-dist`: Comma-separated priorities (default "-10,0,10")
+
+- `-run-after-percent`: % of tasks scheduled in future (default 10)
+
+
+
+### Performance Measurement
+
+
+
+Run the worker in `mock` mode for pure overhead benchmarking.
+
+
+
+```bash
+
+export EXEC_MODE=mock
+
+export EXEC_SLEEP=50ms
+
+./worker
+
+```
+
+
+
+When the worker stops (e.g., via SIGINT), it will print a performance report with p50/p95/p99 latencies for claim, queue wait, and execution.
+
+
+
+### Correctness Verification
+
+
+
+After a load test, verify system invariants:
+
+
+
+```bash
+
+go run ./cmd/verify -dsn "postgres://user:pass@localhost:5432/reproq"
+
+```
+
+
+
+### Internal Benchmarks
+
+
+
+Run Go micro-benchmarks for DB operations:
+
+
+
+```bash
+
+export DATABASE_URL="postgres://user:pass@localhost:5432/reproq"
+
+go test -bench . ./internal/queue
+
+```

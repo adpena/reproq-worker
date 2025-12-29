@@ -7,11 +7,13 @@ import (
 )
 
 type Config struct {
-	DatabaseURL  string
-	WorkerID     string
-	PollInterval time.Duration
-	QueueName    string
+	DatabaseURL   string
+	WorkerID      string
+	PollInterval  time.Duration
+	QueueName     string
 	PythonCommand []string
+	ExecMode      string        // "shell" or "mock"
+	ExecSleep     time.Duration // Sleep duration for mock executor
 }
 
 func Load() (*Config, error) {
@@ -43,12 +45,19 @@ func Load() (*Config, error) {
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
-	// We assume the python module/script is also configured or hardcoded for the executor?
-	// The architecture says: "python -m myproject.task_executor".
-	// Let's allow passing the full base command via env var or just default to something.
-	// We'll add a generic TASK_EXECUTOR_CMD env var which is a comma-separated list or just use a default.
-	// For simplicity, let's assume "python3", "-m", "task_executor" if not set.
 	baseCmd := []string{pythonPath, "-m", "task_executor"}
+
+	execMode := os.Getenv("EXEC_MODE")
+	if execMode == "" {
+		execMode = "shell"
+	}
+
+	execSleep := 100 * time.Millisecond
+	if sleepStr := os.Getenv("EXEC_SLEEP"); sleepStr != "" {
+		if d, err := time.ParseDuration(sleepStr); err == nil {
+			execSleep = d
+		}
+	}
 	
 	return &Config{
 		DatabaseURL:   dbURL,
@@ -56,5 +65,7 @@ func Load() (*Config, error) {
 		PollInterval:  pollInterval,
 		QueueName:     queueName,
 		PythonCommand: baseCmd,
+		ExecMode:      execMode,
+		ExecSleep:     execSleep,
 	}, nil
 }

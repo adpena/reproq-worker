@@ -66,7 +66,13 @@ func main() {
 	logger.Info("Initializing worker...", "config", cfg)
 
 	// 4. Components
-	execService := executor.New(cfg.PythonCommand)
+	var execService executor.IExecutor
+	if cfg.ExecMode == "mock" {
+		execService = executor.NewMockExecutor(cfg.ExecSleep)
+	} else {
+		execService = executor.NewShellExecutor(cfg.PythonCommand)
+	}
+	
 	runService := runner.New(cfg, qService, execService, logger)
 
 	// 5. Signal Handling (Graceful Shutdown)

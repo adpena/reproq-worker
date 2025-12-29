@@ -17,12 +17,13 @@ import (
 type Runner struct {
 	cfg      *config.Config
 	queue    *queue.Service
-	executor *executor.Executor
+	executor executor.IExecutor
 	logger   *slog.Logger
 	wg       sync.WaitGroup
+	metrics  Metrics
 }
 
-func New(cfg *config.Config, q *queue.Service, exec *executor.Executor, logger *slog.Logger) *Runner {
+func New(cfg *config.Config, q *queue.Service, exec executor.IExecutor, logger *slog.Logger) *Runner {
 	return &Runner{
 		cfg:      cfg,
 		queue:    q,
@@ -33,6 +34,7 @@ func New(cfg *config.Config, q *queue.Service, exec *executor.Executor, logger *
 
 func (r *Runner) Start(ctx context.Context) error {
 	r.logger.Info("Starting worker runner", "queue", r.cfg.QueueName)
+	defer r.metrics.Report()
 
 	// Start background lease reaper
 	go r.runReaper(ctx)
@@ -91,6 +93,7 @@ func (r *Runner) runReaper(ctx context.Context) {
 
 func (r *Runner) processNext(ctx context.Context) (bool, error) {
 	// 1. Claim
+	startClaim := time.Now()
 	leaseDuration := 5 * time.Minute
 	task, err := r.queue.Claim(ctx, r.cfg.QueueName, r.cfg.WorkerID, leaseDuration)
 	if err != nil {
@@ -99,6 +102,7 @@ func (r *Runner) processNext(ctx context.Context) (bool, error) {
 		}
 		return false, err
 	}
+	r.metrics.RecordClaim(time.Since(startClaim))
 
 	r.wg.Add(1)
 	go func() {
@@ -113,6 +117,7 @@ func (r *Runner) executeTask(ctx context.Context, task *models.TaskRun, leaseDur
 	logger := r.logger.With("task_id", task.ID, "spec_hash", task.SpecHash)
 	logger.Info("Processing task", "attempt", task.AttemptCount)
 
+	startExec := time.Now()
 	// 2. Start Heartbeat
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
@@ -124,14 +129,13 @@ func (r *Runner) executeTask(ctx context.Context, task *models.TaskRun, leaseDur
 	result, execErr := r.executor.Execute(ctx, task.PayloadJSON, execTimeout)
 
 	// 4. Handle Result
-	// Use background context for completion to ensure it finishes even if worker is shutting down
-	// (within reasonable limits, as the OS will eventually kill the process)
 	completionCtx, completionCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer completionCancel()
 
 	if execErr != nil {
 		logger.Error("Execution infrastructure failed", "error", execErr)
 		r.handleFailure(completionCtx, task, nil, "", "", -1, true)
+		r.metrics.RecordFailure()
 		return
 	}
 
@@ -140,10 +144,16 @@ func (r *Runner) executeTask(ctx context.Context, task *models.TaskRun, leaseDur
 		if err := r.queue.CompleteSuccess(completionCtx, task.ID, result.JSONResult, result.Stdout, result.Stderr, result.ExitCode); err != nil {
 			logger.Error("Failed to mark success", "error", err)
 		}
+		r.metrics.RecordSuccess(time.Since(task.CreatedAt), time.Since(startExec))
 	} else {
 		logger.Warn("Task execution failed", "exit_code", result.ExitCode)
 		shouldRetry := task.AttemptCount < task.MaxAttempts
 		r.handleFailure(completionCtx, task, result.ErrorJSON, result.Stdout, result.Stderr, result.ExitCode, shouldRetry)
+		if shouldRetry {
+			r.metrics.RecordRetry()
+		} else {
+			r.metrics.RecordFailure()
+		}
 	}
 }
 
