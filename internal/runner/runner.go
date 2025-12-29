@@ -94,12 +94,12 @@ func (r *Runner) processNext(ctx context.Context) (bool, error) {
 	if execErr != nil {
 		logger.Error("Execution infrastructure failed", "error", execErr)
 		// This is an internal error (e.g. can't start process), likely retryable
-		return true, r.handleFailure(ctx, task, nil, true)
+		return true, r.handleFailure(ctx, task, nil, "", "", -1, true)
 	}
 
 	if result.ExitCode == 0 {
 		logger.Info("Task completed successfully")
-		if err := r.queue.CompleteSuccess(ctx, task.ID, result.JSONResult); err != nil {
+		if err := r.queue.CompleteSuccess(ctx, task.ID, result.JSONResult, result.Stdout, result.Stderr, result.ExitCode); err != nil {
 			logger.Error("Failed to mark success", "error", err)
 			return true, err
 		}
@@ -107,7 +107,7 @@ func (r *Runner) processNext(ctx context.Context) (bool, error) {
 		logger.Warn("Task execution failed", "exit_code", result.ExitCode, "stderr", result.Stderr)
 		// Determine retry logic
 		shouldRetry := task.AttemptCount < task.MaxAttempts
-		return true, r.handleFailure(ctx, task, result.ErrorJSON, shouldRetry)
+		return true, r.handleFailure(ctx, task, result.ErrorJSON, result.Stdout, result.Stderr, result.ExitCode, shouldRetry)
 	}
 
 	return true, nil
@@ -131,10 +131,10 @@ func (r *Runner) runHeartbeat(ctx context.Context, taskID int64, duration time.D
 	}
 }
 
-func (r *Runner) handleFailure(ctx context.Context, task *models.TaskRun, errorJSON []byte, shouldRetry bool) error {
+func (r *Runner) handleFailure(ctx context.Context, task *models.TaskRun, errorJSON []byte, stdout, stderr string, exitCode int, shouldRetry bool) error {
 	// Simple exponential backoff: 2^attempts * 1 second
 	backoff := time.Duration(math.Pow(2, float64(task.AttemptCount))) * time.Second
 	nextRun := time.Now().Add(backoff)
 
-	return r.queue.CompleteFailure(ctx, task.ID, errorJSON, shouldRetry, nextRun)
+	return r.queue.CompleteFailure(ctx, task.ID, errorJSON, stdout, stderr, exitCode, shouldRetry, nextRun)
 }

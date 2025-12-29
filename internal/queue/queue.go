@@ -33,6 +33,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 	query := `
 		SELECT id, spec_hash, queue_name, status, priority, run_after, 
 		       leased_until, worker_id, payload_json, result_json, error_json, 
+		       stdout, stderr, exit_code,
 		       attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
 		FROM task_runs
 		WHERE queue_name = $1
@@ -47,6 +48,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 	err = tx.QueryRow(ctx, query, queueName).Scan(
 		&task.ID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
+		&task.Stdout, &task.Stderr, &task.ExitCode,
 		&task.AttemptCount, &task.MaxAttempts, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.CompletedAt,
 	)
 
@@ -106,16 +108,48 @@ func (s *Service) Heartbeat(ctx context.Context, taskID int64, duration time.Dur
 }
 
 // CompleteSuccess marks a task as SUCCESSFUL and stores the result.
-func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON json.RawMessage) error {
+func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON json.RawMessage, stdout, stderr string, exitCode int) error {
 	query := `
 		UPDATE task_runs
 		SET status = 'SUCCESSFUL',
 		    result_json = $1,
+		    stdout = $2,
+		    stderr = $3,
+		    exit_code = $4,
 		    completed_at = NOW(),
 		    updated_at = NOW()
-		WHERE id = $2
+		WHERE id = $5
 	`
-	_, err := s.pool.Exec(ctx, query, resultJSON, taskID)
+	_, err := s.pool.Exec(ctx, query, resultJSON, stdout, stderr, exitCode, taskID)
+	return err
+}
+
+// CompleteFailure marks a task as FAILED or schedules a retry.
+func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON json.RawMessage, stdout, stderr string, exitCode int, shouldRetry bool, nextRunAfter time.Time) error {
+	var status models.TaskStatus
+	var runAfter time.Time
+	
+	if shouldRetry {
+		status = models.StatusPending
+		runAfter = nextRunAfter
+	} else {
+		status = models.StatusFailed
+		runAfter = time.Now()
+	}
+
+	query := `
+		UPDATE task_runs
+		SET status = $1,
+		    error_json = $2,
+		    stdout = $3,
+		    stderr = $4,
+		    exit_code = $5,
+		    run_after = $6,
+		    completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
+		    updated_at = NOW()
+		WHERE id = $7
+	`
+	_, err := s.pool.Exec(ctx, query, status, errorJSON, stdout, stderr, exitCode, runAfter, taskID)
 	return err
 }
 
@@ -167,46 +201,6 @@ func (s *Service) RequeueByHash(ctx context.Context, specHash string) (int64, er
 		}
 		return 0, fmt.Errorf("failed to requeue hash %s: %w", specHash, err)
 	}
-	return newID, nil
-}
-
-// CompleteFailure marks a task as FAILED or schedules a retry.
-func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON json.RawMessage, shouldRetry bool, nextRunAfter time.Time) error {
-	var status models.TaskStatus
-	var runAfter time.Time
-	
-	if shouldRetry {
-		status = models.StatusRetrying // Or Pending, depending on semantics. Architecture said RETRYING or PENDING.
-		// If we set to RETRYING, the poller must pick it up?
-		// The poll query checks status = 'PENDING'.
-		// So if we want it to be retried, we should probably set it back to PENDING.
-		// However, the enum has RETRYING. Let's stick to the architecture: "Update status = 'RETRYING' (or 'PENDING' with new run_after...)"
-		// If I set it to RETRYING, I need to make sure the poller picks it up.
-		// The poller query in Claim() is: WHERE status = 'PENDING'.
-		// So checking architecture... "Status: PENDING, RUNNING, SUCCESSFUL, FAILED, RETRYING..."
-		// Poll Loop: "WHERE status = 'PENDING'".
-		// So if I set it to RETRYING, it won't be picked up unless I change the poller.
-		// OR the architecture implies RETRYING is a transient state that eventually becomes PENDING?
-		// Or maybe the poller should look for PENDING OR RETRYING?
-		// "Status = 'RETRYING' (or 'PENDING'...)" -> I'll choose 'PENDING' for simplicity so the standard poller picks it up, 
-		// unless 'RETRYING' is for a different purpose.
-		// Let's use PENDING for now to ensure it gets picked up.
-		status = models.StatusPending
-		runAfter = nextRunAfter
-	} else {
-		status = models.StatusFailed
-		runAfter = time.Now() // Doesn't matter much for failed
+		return newID, nil
 	}
-
-	query := `
-		UPDATE task_runs
-		SET status = $1,
-		    error_json = $2,
-		    run_after = $3,
-		    completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
-		    updated_at = NOW()
-		WHERE id = $4
-	`
-	_, err := s.pool.Exec(ctx, query, status, errorJSON, runAfter, taskID)
-	return err
-}
+	

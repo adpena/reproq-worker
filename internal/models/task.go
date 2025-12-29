@@ -28,6 +28,9 @@ type TaskRun struct {
 	PayloadJSON  json.RawMessage `db:"payload_json"`
 	ResultJSON   json.RawMessage `db:"result_json"`
 	ErrorJSON    json.RawMessage `db:"error_json"`
+	Stdout       *string         `db:"stdout"`
+	Stderr       *string         `db:"stderr"`
+	ExitCode     *int            `db:"exit_code"`
 	AttemptCount int             `db:"attempt_count"`
 	MaxAttempts  int             `db:"max_attempts"`
 	CreatedAt    time.Time       `db:"created_at"`
