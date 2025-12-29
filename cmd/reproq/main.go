@@ -5,47 +5,35 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"reproq-worker/internal/config"
-	"reproq-worker/internal/db"
-	"reproq-worker/internal/executor"
-	"reproq-worker/internal/logging"
-	"reproq-worker/internal/queue"
-	"reproq-worker/internal/runner"
-)
-
-func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "worker":
-		runWorker(os.Args[2:])
-	case "replay":
-		runReplay(os.Args[2:])
-	default:
-		usage()
-		os.Exit(1)
-	}
-}
-
-func usage() {
-	fmt.Println("usage: reproq <worker|replay> [args]")
-}
-
+...
 func runWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
+	metricsPort := fs.Int("metrics-port", 0, "Port to serve Prometheus metrics (0 to disable)")
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
 	cfg.BindFlags(fs)
 	fs.Parse(args)
+
+	if *metricsPort > 0 {
+		go func() {
+			fmt.Printf("📊 Serving Prometheus metrics on :%d/metrics\n", *metricsPort)
+			http.Handle("/metrics", promhttp.Handler())
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", *metricsPort), nil); err != nil {
+				log.Printf("Metrics server error: %v", err)
+			}
+		}()
+	}
 
 	logger := logging.Init(cfg.WorkerID)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -70,6 +58,53 @@ func runWorker(args []string) {
 	r := runner.New(cfg, q, exec, logger)
 	if err := r.Start(ctx); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func runBeat(args []string) {
+	fs := flag.NewFlagSet("beat", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	interval := fs.Duration("interval", 30*time.Second, "Polling interval for periodic tasks")
+	fs.Parse(args)
+
+	if *dsn == "" {
+		log.Fatal("DSN required (use --dsn or DATABASE_URL)")
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	pool, err := db.NewPool(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+	fmt.Printf("Starting reproq beat (interval: %v)...\n", *interval)
+
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+
+	// Run once immediately
+	if n, err := q.EnqueueDuePeriodicTasks(ctx); err != nil {
+		fmt.Printf("Error: %v\n", err)
+	} else if n > 0 {
+		fmt.Printf("Enqueued %d periodic tasks\n", n)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Shutting down beat...")
+			return
+		case <-ticker.C:
+			if n, err := q.EnqueueDuePeriodicTasks(ctx); err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else if n > 0 {
+				fmt.Printf("Enqueued %d periodic tasks\n", n)
+			}
+		}
 	}
 }
 

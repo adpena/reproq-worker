@@ -6,11 +6,22 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand"
+	"os"
 	"reproq-worker/internal/config"
 	"reproq-worker/internal/executor"
 	"reproq-worker/internal/queue"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	tasksProcessed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "reproq_tasks_processed_total",
+		Help: "Total number of tasks processed",
+	}, []string{"status", "queue"})
 )
 
 type Runner struct {
@@ -34,6 +45,27 @@ func New(cfg *config.Config, q *queue.Service, exec executor.IExecutor, logger *
 
 func (r *Runner) Start(ctx context.Context) error {
 	r.logger.Info("Starting reproq worker", "concurrency", r.cfg.MaxConcurrency)
+
+	hostname, _ := os.Hostname()
+	if err := r.queue.RegisterWorker(ctx, r.cfg.WorkerID, hostname, r.cfg.MaxConcurrency, r.cfg.QueueNames, "0.1.0"); err != nil {
+		r.logger.Warn("Failed to register worker", "error", err)
+	}
+
+	// Worker Heartbeat
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := r.queue.UpdateWorkerHeartbeat(ctx, r.cfg.WorkerID); err != nil {
+					r.logger.Warn("Failed to update worker heartbeat", "error", err)
+				}
+			}
+		}
+	}()
 
 	// Simple round-robin or fair polling across configured queues
 	for {
@@ -132,9 +164,11 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 
 	if env.Ok {
 		logger.Info("Task successful")
+		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
 		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return)
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
+		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		errObj, _ := json.Marshal(map[string]interface{}{
 			"kind":            "app_error",
 			"exception_class": env.ExceptionClass,
@@ -144,7 +178,19 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":              time.Now(),
 			"worker_id":       r.cfg.WorkerID,
 		})
-		shouldRetry := task.Attempts + 1 < r.cfg.MaxAttemptsDefault
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now().Add(30*time.Second))
+		
+		shouldRetry := task.Attempts + 1 < task.MaxAttempts
+		
+		// Exponential backoff: 2^attempt * base_delay (e.g. 30s)
+		// 0 -> 30s
+		// 1 -> 60s
+		// 2 -> 120s
+		backoffSeconds := (1 << uint(task.Attempts)) * 30
+		if backoffSeconds > 3600 { // Cap at 1 hour
+			backoffSeconds = 3600
+		}
+		
+		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
+		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun)
 	}
 }

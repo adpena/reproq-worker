@@ -14,22 +14,15 @@ build:
 	go build -o reproq ./cmd/reproq
 
 test:
-	go test -v ./internal/executor/...
+	go test -v ./internal/...
 
 up:
 	docker-compose up -d db
 	@echo "Waiting for DB to be ready..."
-	@sleep 5
-
-down:
-	docker-compose down
-
-migrate:
-	@echo "Migrations should be run via your preferred tool or manually."
-	@echo "Example: cat migrations/*.up.sql | docker-compose exec -T db psql -U user -d reproq"
+	@for i in {1..10}; do pg_isready -h localhost -p 5432 -U user && break || sleep 1; done
 
 test-integration: up
 	-export DATABASE_URL="postgres://user:pass@localhost:5432/reproq?sslmode=disable" && \
 	cat migrations/*.up.sql | psql "postgres://user:pass@localhost:5432/reproq?sslmode=disable" && \
-	go test -v ./internal/queue/...
+	go test -v ./internal/queue
 	$(MAKE) down

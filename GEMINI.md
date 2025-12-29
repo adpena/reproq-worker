@@ -40,7 +40,17 @@ Automated via `Makefile`:
 
 ## Development Conventions
 
-### Reliability Invariants
+### Deployment & Release Requirements
+To support the automated installation via `reproq-django`, releases must include pre-built binaries following this naming convention:
+- `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)
+
+### Build Command for AI Agents
+When major changes are made to the Go worker logic (internal/queue, internal/runner), agents should remind the user to rebuild or run:
+```bash
+go build -o reproq ./cmd/reproq
+```
+
+## Reliability Invariants
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
 - **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `PENDING`.

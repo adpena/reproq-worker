@@ -33,6 +33,14 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			WHERE status = 'READY'
 			  AND queue_name = $1
 			  AND (run_after IS NULL OR run_after <= NOW())
+			  AND (
+				lock_key IS NULL 
+				OR NOT EXISTS (
+					SELECT 1 FROM task_runs
+					WHERE lock_key = task_runs.lock_key 
+					  AND status = 'RUNNING'
+				)
+			  )
 			ORDER BY priority DESC, enqueued_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
@@ -50,18 +58,18 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		RETURNING 
 			task_runs.result_id, backend_alias, queue_name, priority, run_after,
 			spec_json, spec_hash, status, enqueued_at, started_at,
-			last_attempted_at, finished_at, attempts, worker_ids,
-			return_json, errors_json, leased_until, leased_by,
-			logs_uri, artifacts_uri, created_at, updated_at, cancel_requested
+			last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
+			lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
+			logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
 	`
 
 	var t TaskRun
 	err := s.pool.QueryRow(ctx, query, queueName, leasedUntil, workerID).Scan(
 		&t.ResultID, &t.BackendAlias, &t.QueueName, &t.Priority, &t.RunAfter,
 		&t.SpecJSON, &t.SpecHash, &t.Status, &t.EnqueuedAt, &t.StartedAt,
-		&t.LastAttemptedAt, &t.FinishedAt, &t.Attempts, &t.WorkerIDs,
-		&t.ReturnJSON, &t.ErrorsJSON, &t.LeasedUntil, &t.LeasedBy,
-		&t.LogsURI, &t.ArtifactsURI, &t.CreatedAt, &t.UpdatedAt, &t.CancelRequested,
+		&t.LastAttemptedAt, &t.FinishedAt, &t.Attempts, &t.MaxAttempts, &t.TimeoutSeconds,
+		&t.LockKey, &t.WorkerIDs, &t.ReturnJSON, &t.ErrorsJSON, &t.LeasedUntil, &t.LeasedBy,
+		&t.LogsURI, &t.ArtifactsURI, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt, &t.CancelRequested,
 	)
 
 	if err != nil {
@@ -94,8 +102,15 @@ func (s *Service) Heartbeat(ctx context.Context, resultID int64, workerID string
 	return cancelled, nil
 }
 
-// CompleteSuccess marks the task as SUCCESSFUL.
+// CompleteSuccess marks the task as SUCCESSFUL and triggers dependents.
 func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Finalize the task
 	query := `
 		UPDATE task_runs
 		SET status = 'SUCCESSFUL',
@@ -106,11 +121,40 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 		    updated_at = NOW()
 		WHERE result_id = $2 AND leased_by = $3 AND status = 'RUNNING'
 	`
-	res, err := s.pool.Exec(ctx, query, returnJSON, resultID, workerID)
-	if err == nil && res.RowsAffected() == 0 {
-		return fmt.Errorf("fencing failure")
+	res, err := tx.Exec(ctx, query, returnJSON, resultID, workerID)
+	if err != nil {
+		return err
 	}
-	return err
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("fencing failure or task not running")
+	}
+
+	// 2. Trigger dependents
+	// Decrement wait_count for all tasks waiting on this one or in the same workflow
+	// If wait_count reaches 0, set status to READY
+	triggerQuery := `
+		UPDATE task_runs
+		SET wait_count = wait_count - 1,
+		    updated_at = NOW()
+		WHERE (parent_id = $1 OR (workflow_id IS NOT NULL AND workflow_id = (SELECT workflow_id FROM task_runs WHERE result_id = $1)))
+		  AND status = 'WAITING'
+		RETURNING result_id, wait_count
+	`
+	// Note: The logic above is a bit simplified. Usually, you'd want a more precise link.
+	// Let's stick to parent_id for now for reliability.
+	triggerQuery = `
+		UPDATE task_runs
+		SET wait_count = wait_count - 1,
+		    status = CASE WHEN wait_count - 1 <= 0 THEN 'READY'::task_status_mvp ELSE 'WAITING'::task_status_mvp END,
+		    updated_at = NOW()
+		WHERE parent_id = $1 AND status = 'WAITING'
+	`
+	_, err = tx.Exec(ctx, triggerQuery, resultID)
+	if err != nil {
+		return fmt.Errorf("failed to trigger dependents: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CompleteFailure marks the task as FAILED or requeues it.
@@ -171,12 +215,33 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 // Replay creates a new READY task from an existing one.
 func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 	query := `
-		INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status)
-		SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY'
+		INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key)
+		SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key
 		FROM task_runs WHERE result_id = $1
 		RETURNING result_id
 	`
 	var newID int64
 	err := s.pool.QueryRow(ctx, query, resultID).Scan(&newID)
 	return newID, err
+}
+
+func (s *Service) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {
+	query := `
+		INSERT INTO reproq_workers (worker_id, hostname, concurrency, queues, version, started_at, last_seen_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		ON CONFLICT (worker_id) DO UPDATE
+		SET hostname = EXCLUDED.hostname,
+		    concurrency = EXCLUDED.concurrency,
+		    queues = EXCLUDED.queues,
+		    version = EXCLUDED.version,
+		    last_seen_at = NOW()
+	`
+	_, err := s.pool.Exec(ctx, query, id, hostname, concurrency, queues, version)
+	return err
+}
+
+func (s *Service) UpdateWorkerHeartbeat(ctx context.Context, id string) error {
+	query := `UPDATE reproq_workers SET last_seen_at = NOW() WHERE worker_id = $1`
+	_, err := s.pool.Exec(ctx, query, id)
+	return err
 }

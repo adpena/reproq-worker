@@ -62,18 +62,18 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 	for _, t := range dueTasks {
 		// 2. Enqueue the task
 		// We need to calculate a spec_hash. For periodic tasks, we can use name + next_run_at to avoid duplicates if beat runs twice.
-		specJSON := fmt.Sprintf(`{"task": "%s", "args": %s, "periodic_name": "%s", "scheduled_at": "%s"}`, 
+		specJSON := fmt.Sprintf(`{"task_path": "%s", "args": %s, "kwargs": {}, "periodic_name": "%s", "scheduled_at": "%s"}`, 
 			t.TaskPath, string(t.PayloadJSON), t.Name, t.NextRunAt.Format(time.RFC3339))
 		
 		// Use a simple hash approach or reuse existing logic if accessible.
 		// For now, let's just insert.
 		
 		insertQuery := `
-			INSERT INTO task_runs (spec_hash, queue_name, payload_json, priority, run_after, max_attempts, status)
-			VALUES (encode(digest($1, 'sha256'), 'hex'), $2, $3, $4, $5, $6, 'PENDING')
-			ON CONFLICT (spec_hash) DO NOTHING
+			INSERT INTO task_runs (spec_hash, queue_name, spec_json, priority, run_after, attempts, status)
+			VALUES (encode(digest($1, 'sha256'), 'hex'), $2, $3, $4, $5, 0, 'READY')
+			ON CONFLICT (spec_hash) WHERE status IN ('READY', 'RUNNING') DO NOTHING
 		`
-		_, err = tx.Exec(ctx, insertQuery, specJSON, t.QueueName, specJSON, t.Priority, t.NextRunAt, t.MaxAttempts)
+		_, err = tx.Exec(ctx, insertQuery, specJSON, t.QueueName, specJSON, t.Priority, t.NextRunAt)
 		if err != nil {
 			return 0, fmt.Errorf("failed to enqueue periodic task %s: %w", t.Name, err)
 		}
