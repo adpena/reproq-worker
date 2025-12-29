@@ -76,7 +76,34 @@ Re-enqueues a task for execution.
 ---
 
 ## 🧪 Development & Testing
-...
+
+Reproq Worker includes a comprehensive test suite covering unit tests, integration tests, and benchmarks.
+
+### Run Unit Tests
+Covers the executor, security validator, and mock mode.
+```bash
+make test
+```
+*Alternatively: `go test ./internal/executor/... ./internal/runner/...`*
+
+### Run Integration Tests
+Requires a running PostgreSQL instance (or uses Docker if configured). These tests verify the full lifecycle of task claiming, heartbeats, and terminal state updates.
+```bash
+make test-integration
+```
+
+### Performance Benchmarks
+Test the throughput of the Postgres queue claiming logic.
+```bash
+go test -bench . ./internal/queue
+```
+
+### Torture Test
+A specialized command to stress-test the worker under high concurrency and database contention.
+```bash
+./reproq torture --dsn $DATABASE_URL --concurrency 50 --duration 5m
+```
+
 ## 🤝 Contributing & Feedback
 
 We welcome contributions of all kinds!

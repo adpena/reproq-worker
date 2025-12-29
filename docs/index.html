@@ -27,6 +27,7 @@
                 <a href="#overview" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Overview</a>
                 <a href="#installation" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Installation</a>
                 <a href="#commands" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Commands</a>
+                <a href="#features" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Advanced Features</a>
                 <a href="#metrics" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Prometheus Metrics</a>
                 <a href="#deployment" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Deployment</a>
             </nav>
@@ -74,6 +75,41 @@
                 <h3 class="text-xl font-bold mt-8">replay</h3>
                 <p>Re-enqueues a task.</p>
                 <pre>./reproq replay --id 12345</pre>
+            </section>
+
+            <section id="features" class="mb-16">
+                <h2 class="text-3xl font-bold mb-6">Advanced Features</h2>
+                <div class="space-y-6">
+                    <div class="flex gap-4 p-6 bg-slate-100 rounded-2xl">
+                        <div class="flex-shrink-0 w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-slate-900">Global Rate Limiting</h4>
+                            <p class="text-sm text-slate-600">Protect external APIs with distributed rate limiting. Configure limits globally or per-task type via the CLI or database.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-6 bg-slate-100 rounded-2xl">
+                        <div class="flex-shrink-0 w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-slate-900">Deterministic Deduplication</h4>
+                            <p class="text-sm text-slate-600">Built-in spec hashing ensures that identical tasks are coalesced rather than duplicated, maintaining strict idempotency.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-6 bg-slate-100 rounded-2xl">
+                        <div class="flex-shrink-0 w-12 h-12 bg-indigo-500 rounded-xl flex items-center justify-center text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-slate-900">Self-Healing Leases</h4>
+                            <p class="text-sm text-slate-600">Tasks are claimed with a heartbeat-backed lease. If a worker process dies, the system automatically returns the task to the queue after the lease expires.</p>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <section id="metrics" class="mb-16 prose prose-slate max-w-none">
