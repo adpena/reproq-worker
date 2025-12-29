@@ -115,7 +115,10 @@ func (r *Runner) processNext(ctx context.Context) (bool, error) {
 		}
 		return false, err
 	}
-	r.metrics.RecordClaim(time.Since(startClaim))
+	duration := time.Since(startClaim)
+	r.metrics.RecordClaim(duration)
+	tasksClaimed.WithLabelValues(r.cfg.QueueName).Inc()
+	claimDuration.WithLabelValues(r.cfg.QueueName).Observe(duration.Seconds())
 
 	r.wg.Add(1)
 	go func() {
@@ -130,8 +133,6 @@ func (r *Runner) executeTask(parentCtx context.Context, task *queue.TaskRun, lea
 	logger := r.logger.With("task_id", task.ID, "spec_hash", task.SpecHash)
 	
 	// Security: Validate RunSpec before execution
-	// For now we assume payload_json has a "task" field or similar. 
-	// If it doesn't, we log and fail.
 	var payload struct {
 		Task string `json:"task"`
 	}
@@ -139,51 +140,56 @@ func (r *Runner) executeTask(parentCtx context.Context, task *queue.TaskRun, lea
 		if err := r.validator.Validate(payload.Task); err != nil {
 			logger.Error("Security validation failed", "error", err)
 			r.queue.CompleteFailure(context.Background(), task.ID, r.cfg.WorkerID, []byte(err.Error()), "", "", -1, false, time.Now())
+			tasksCompleted.WithLabelValues(r.cfg.QueueName, "security_error").Inc()
 			return
 		}
 	}
 
 	logger.Info("Processing task", "attempt", task.AttemptCount)
 
-	// Create sub-context for THIS execution that can be cancelled if lease is lost
 	execCtx, cancelExec := context.WithCancel(parentCtx)
 	defer cancelExec()
 
 	startExec := time.Now()
 	
-	// 2. Start Heartbeat with cancellation
 	go func() {
 		if err := r.runHeartbeat(execCtx, task.ID, leaseDuration); err != nil {
 			logger.Error("Heartbeat failure or lease lost, cancelling execution", "error", err)
-			cancelExec() // This kills the executor.Execute process
+			cancelExec() 
 		}
 	}()
 
-	// 3. Execute
 	execTimeout := 1 * time.Hour 
 	result, execErr := r.executor.Execute(execCtx, task.PayloadJSON, execTimeout)
 
-	// 4. Handle Result
 	completionCtx, completionCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer completionCancel()
 
 	if execErr != nil {
 		if errors.Is(execErr, context.Canceled) {
 			logger.Warn("Task execution cancelled (likely due to lease loss or shutdown)")
+			tasksCompleted.WithLabelValues(r.cfg.QueueName, "cancelled").Inc()
 		} else {
 			logger.Error("Execution infrastructure failed", "error", execErr)
+			tasksCompleted.WithLabelValues(r.cfg.QueueName, "infra_error").Inc()
 		}
 		r.handleFailure(completionCtx, task, nil, "", "", -1, true)
 		r.metrics.RecordFailure()
 		return
 	}
 
+	totalExecDuration := time.Since(startExec)
+	queueWait := time.Since(task.CreatedAt)
+
 	if result.ExitCode == 0 {
 		logger.Info("Task completed successfully")
 		if err := r.queue.CompleteSuccess(completionCtx, task.ID, r.cfg.WorkerID, result.JSONResult, result.Stdout, result.Stderr, result.ExitCode); err != nil {
 			logger.Error("Failed to mark success (fencing error?)", "error", err)
 		}
-		r.metrics.RecordSuccess(time.Since(task.CreatedAt), time.Since(startExec))
+		r.metrics.RecordSuccess(queueWait, totalExecDuration)
+		tasksCompleted.WithLabelValues(r.cfg.QueueName, "success").Inc()
+		execDuration.WithLabelValues(r.cfg.QueueName).Observe(totalExecDuration.Seconds())
+		queueWaitTime.WithLabelValues(r.cfg.QueueName).Observe(queueWait.Seconds())
 	} else {
 		logger.Warn("Task execution failed", "exit_code", result.ExitCode)
 		shouldRetry := task.AttemptCount < task.MaxAttempts
@@ -193,8 +199,10 @@ func (r *Runner) executeTask(parentCtx context.Context, task *queue.TaskRun, lea
 		
 		if shouldRetry {
 			r.metrics.RecordRetry()
+			tasksCompleted.WithLabelValues(r.cfg.QueueName, "retry").Inc()
 		} else {
 			r.metrics.RecordFailure()
+			tasksCompleted.WithLabelValues(r.cfg.QueueName, "failure").Inc()
 		}
 	}
 }

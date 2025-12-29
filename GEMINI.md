@@ -1,0 +1,52 @@
+# Gemini Project Context: reproq-worker
+
+## Project Overview
+`reproq-worker` is a production-grade, deterministic background task execution service written in Go. It is designed to act as a scalable backend for Django 6.0's Tasks API, replacing traditional brokers like Celery or RQ with a Postgres-backed queue.
+
+### Core Technologies
+- **Language**: Go 1.22+
+- **Database**: PostgreSQL 15+ (Required for `SKIP LOCKED` support)
+- **Database Driver**: `jackc/pgx/v5`
+- **Executor**: External Python processes (invoked via `python -m`)
+- **Isolation**: Sub-process isolation with size-limited log buffers and security module validation.
+
+### Architecture
+The project follows a modular Go structure:
+- `cmd/reproq`: Unified CLI entry point for all subcommands.
+- `internal/queue`: Core domain logic for the Postgres queue, including atomic claiming (CTE + `SKIP LOCKED`), fencing tokens, and lease management.
+- `internal/runner`: Orchestration layer that manages the worker lifecycle, heartbeats, and graceful shutdowns.
+- `internal/executor`: Abstraction for executing tasks, including a security validator and a mock mode for benchmarking.
+- `internal/config`: Centralized configuration management via environment variables and CLI flags.
+
+## Building and Running
+
+### Key Commands
+- **Build**: `go build -o reproq ./cmd/reproq`
+- **Run Worker**: `./reproq worker --dsn "postgres://user:pass@localhost:5432/reproq"`
+- **Load Testing**: `./reproq loadgen --tasks 10000`
+- **Verification**: `./reproq verify --dsn "postgres://..."`
+- **Torture Test**: `./reproq torture --dsn "postgres://..."`
+
+### Development & Testing
+Automated via `Makefile`:
+- `make test`: Runs unit tests for executor and validator.
+- `make test-integration`: Spins up a Dockerized Postgres, applies migrations, and runs full lifecycle integration tests.
+- `make up`: Starts the Postgres container for local development.
+
+## Development Conventions
+
+### Reliability Invariants
+- **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
+- **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
+- **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `PENDING`.
+- **Concurrency Guard**: A partial unique index on `spec_hash` ensures only one active run exists per task specification.
+
+### Security Posture
+- **Validation**: All task module paths must be validated against an allow-list in `internal/executor/validator.go`.
+- **Resource Capping**: `stdout` and `stderr` capture is capped at 1MB to prevent memory exhaustion.
+- **Log Hygiene**: Sensitive payloads in `payload_json` are redacted from standard structured logs.
+
+### Coding Style
+- **Structured Logging**: Use `log/slog` for all logging, ensuring `worker_id` and `task_id` are included in context.
+- **Error Handling**: Use sentinel errors (`ErrNoTasks`) and proper wrapping with `%w` for database operations.
+- **Performance**: Favor single-trip atomic queries (CTEs) over multiple transactional round-trips.

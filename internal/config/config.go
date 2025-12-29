@@ -17,6 +17,7 @@ type Config struct {
 	ExecSleep       time.Duration // Sleep duration for mock executor
 	LeaseDuration   time.Duration // How long a worker claims a task for
 	ShutdownTimeout time.Duration // How long to wait for tasks to finish on shutdown
+	HealthAddr      string        // HTTP address for health/metrics
 }
 
 func (c *Config) BindFlags(fs *flag.FlagSet) {
@@ -28,6 +29,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.ExecSleep, "exec-sleep", c.ExecSleep, "Sleep duration for mock mode")
 	fs.DurationVar(&c.LeaseDuration, "lease-duration", c.LeaseDuration, "Initial task lease duration")
 	fs.DurationVar(&c.ShutdownTimeout, "shutdown-timeout", c.ShutdownTimeout, "Time to wait for tasks on shutdown")
+	fs.StringVar(&c.HealthAddr, "health-addr", c.HealthAddr, "HTTP address for health/metrics")
 }
 
 func Load() (*Config, error) {
@@ -75,6 +77,10 @@ func Load() (*Config, error) {
 	
 	leaseDuration := 5 * time.Minute
 	shutdownTimeout := 30 * time.Second
+	healthAddr := ":8080"
+	if addr := os.Getenv("HEALTH_ADDR"); addr != "" {
+		healthAddr = addr
+	}
 
 	return &Config{
 		DatabaseURL:     dbURL,
@@ -86,5 +92,6 @@ func Load() (*Config, error) {
 		ExecSleep:       execSleep,
 		LeaseDuration:   leaseDuration,
 		ShutdownTimeout: shutdownTimeout,
+		HealthAddr:      healthAddr,
 	}, nil
 }

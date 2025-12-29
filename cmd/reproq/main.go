@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"reproq-worker/internal/config"
@@ -16,6 +17,7 @@ import (
 	"reproq-worker/internal/logging"
 	"reproq-worker/internal/queue"
 	"reproq-worker/internal/runner"
+	"reproq-worker/internal/web"
 	"strings"
 	"syscall"
 	"time"
@@ -100,6 +102,15 @@ func runWorker(args []string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Start Health/Metrics server
+	webServer := web.NewServer(pool, cfg.HealthAddr)
+	go func() {
+		logger.Info("Starting health/metrics server", "addr", cfg.HealthAddr)
+		if err := webServer.Start(ctx); err != nil && err != http.ErrServerClosed {
+			logger.Error("Web server failed", "error", err)
+		}
+	}()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
