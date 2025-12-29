@@ -216,8 +216,13 @@ func (r *Runner) runHeartbeat(ctx context.Context, taskID int64, duration time.D
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := r.queue.Heartbeat(ctx, taskID, duration); err != nil {
+			cancelRequested, err := r.queue.Heartbeat(ctx, taskID, duration)
+			if err != nil {
 				return err
+			}
+			if cancelRequested {
+				r.logger.Info("Remote cancellation requested for task", "task_id", taskID)
+				return errors.New("remote cancellation requested")
 			}
 		}
 	}

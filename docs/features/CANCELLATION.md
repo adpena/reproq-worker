@@ -9,9 +9,9 @@ Operators need to stop a long-running task immediately without killing the entir
 - If true, the `Runner` cancels the task's `execCtx`, which kills the sub-process.
 
 ## Implementation Checklist
-- [ ] Migration: Add `cancel_requested` column.
-- [ ] CLI: Implement `reproq cancel <task_id>`.
-- [ ] Logic: Update `internal/runner.runHeartbeat` to check the flag and trigger cancellation.
+- [x] Migration: Add `cancel_requested` column.
+- [x] CLI: Implement `reproq cancel --id <task_id>`.
+- [x] Logic: Update `internal/runner.runHeartbeat` to check the flag and trigger cancellation.
 
 ## References
 - Kubernetes `terminationGracePeriod`.

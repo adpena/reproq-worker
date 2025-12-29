@@ -41,4 +41,5 @@ type TaskRun struct {
 	CompletedAt  *time.Time      `db:"completed_at"`
 	FailedAt     *time.Time      `db:"failed_at"`
 	LastError    *string         `db:"last_error"`
+	CancelRequested bool         `db:"cancel_requested"`
 }

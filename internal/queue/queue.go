@@ -77,7 +77,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 			leased_until, worker_id, payload_json, result_json, error_json, 
 			stdout, stderr, exit_code,
 			attempt_count, max_attempts, created_at, updated_at, started_at, completed_at,
-			failed_at, last_error
+			failed_at, last_error, cancel_requested
 	`
 
 	var task TaskRun
@@ -86,7 +86,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
 		&task.Stdout, &task.Stderr, &task.ExitCode,
 		&task.AttemptCount, &task.MaxAttempts, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.CompletedAt,
-		&task.FailedAt, &task.LastError,
+		&task.FailedAt, &task.LastError, &task.CancelRequested,
 	)
 
 	if err != nil {
@@ -117,21 +117,36 @@ func (s *Service) ReapExpiredLeases(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// Heartbeat extends the lease for a running task.
-func (s *Service) Heartbeat(ctx context.Context, taskID int64, duration time.Duration) error {
+// Heartbeat extends the lease for a running task and returns if cancellation is requested.
+func (s *Service) Heartbeat(ctx context.Context, taskID int64, duration time.Duration) (bool, error) {
 	query := `
 		UPDATE task_runs
 		SET leased_until = $1,
 		    updated_at = NOW()
 		WHERE id = $2 AND status = 'RUNNING'
+		RETURNING cancel_requested
 	`
 	newLease := time.Now().Add(duration)
-	result, err := s.pool.Exec(ctx, query, newLease, taskID)
+	var cancelRequested bool
+	err := s.pool.QueryRow(ctx, query, newLease, taskID).Scan(&cancelRequested)
 	if err != nil {
-		return fmt.Errorf("heartbeat failed: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("task %d not running or lost", taskID)
+		}
+		return false, fmt.Errorf("heartbeat failed: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("task %d not running or lost", taskID)
+	return cancelRequested, nil
+}
+
+// RequestCancellation marks a task for cancellation.
+func (s *Service) RequestCancellation(ctx context.Context, taskID int64) error {
+	query := `UPDATE task_runs SET cancel_requested = TRUE WHERE id = $1`
+	res, err := s.pool.Exec(ctx, query, taskID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("task %d not found", taskID)
 	}
 	return nil
 }

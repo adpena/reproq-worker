@@ -44,6 +44,8 @@ func main() {
 		runTriage(os.Args[2:])
 	case "limit":
 		runLimit(os.Args[2:])
+	case "cancel":
+		runCancel(os.Args[2:])
 	default:
 		fmt.Printf("unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -213,6 +215,30 @@ func runTorture(args []string) {
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	fs.Parse(args)
 	fmt.Println("Torture test would run here against DSN:", *dsn)
+}
+
+func runCancel(args []string) {
+	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	taskID := fs.Int64("id", 0, "Task ID to cancel")
+	fs.Parse(args)
+
+	if *dsn == "" || *taskID == 0 {
+		log.Fatal("DATABASE_URL and --id are required")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+	if err := q.RequestCancellation(ctx, *taskID); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Successfully requested cancellation for task %d\n", *taskID)
 }
 
 func runLimit(args []string) {
