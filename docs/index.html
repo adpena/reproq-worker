@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reproq Worker | Documentation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        code, pre { font-family: 'JetBrains Mono', monospace; }
+        .prose pre { background-color: #1e293b; color: #f8fafc; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }
+        .gradient-text { background: linear-gradient(135deg, #10b981 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 leading-relaxed">
+    <div class="flex min-h-screen">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-white border-r border-slate-200 hidden md:block sticky top-0 h-screen overflow-y-auto">
+            <div class="p-6">
+                <h1 class="text-2xl font-bold gradient-text">Reproq</h1>
+                <p class="text-xs text-slate-500 font-semibold tracking-widest uppercase mt-1">Go Worker</p>
+            </div>
+            <nav class="px-4 pb-6 space-y-1">
+                <a href="#overview" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Overview</a>
+                <a href="#installation" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Installation</a>
+                <a href="#commands" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Commands</a>
+                <a href="#metrics" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Prometheus Metrics</a>
+                <a href="#deployment" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Deployment</a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 max-w-4xl mx-auto px-6 py-12 md:px-12">
+            <section id="overview" class="mb-16">
+                <h2 class="text-4xl font-extrabold text-slate-900 mb-4 tracking-tight">The High-Performance Engine.</h2>
+                <p class="text-xl text-slate-600 mb-8">Reproq Worker is a multi-threaded execution engine written in Go. It handles the heavy lifting of polling, heartbeat management, and process execution.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="p-4 bg-white border border-slate-200 rounded-xl shadow-sm">
+                        <h3 class="font-bold text-emerald-600 mb-1">Low Latency</h3>
+                        <p class="text-sm text-slate-500">Atomic polling with SKIP LOCKED ensures sub-millisecond task pickup.</p>
+                    </div>
+                    <div class="p-4 bg-white border border-slate-200 rounded-xl shadow-sm">
+                        <h3 class="font-bold text-emerald-600 mb-1">Self-Healing</h3>
+                        <p class="text-sm text-slate-500">Built-in lease reaper and heartbeat system prevents zombie tasks.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="installation" class="mb-16 prose prose-slate max-w-none">
+                <h2 class="text-3xl font-bold mb-6">Installation</h2>
+                <p>Reproq provides pre-built binaries for Linux, macOS, and Windows. You can download them manually or use the Django helper.</p>
+                
+                <h4 class="font-bold mt-4">Manual Install (Go)</h4>
+                <pre>go build -o reproq ./cmd/reproq</pre>
+
+                <h4 class="font-bold mt-4">Cross-Platform Binaries</h4>
+                <p>Download from the <a href="https://github.com/adpena/reproq-worker/releases" class="text-emerald-600">Releases page</a>. Binaries follow the pattern <code>reproq-{os}-{arch}</code>.</p>
+            </section>
+
+            <section id="commands" class="mb-16 prose prose-slate max-w-none">
+                <h2 class="text-3xl font-bold mb-6">Command Reference</h2>
+                
+                <h3 class="text-xl font-bold">worker</h3>
+                <p>Starts the execution node.</p>
+                <pre>./reproq worker --dsn $DB_URL --concurrency 20 --metrics-port 9090</pre>
+
+                <h3 class="text-xl font-bold mt-8">beat</h3>
+                <p>Starts the cron scheduler.</p>
+                <pre>./reproq beat --dsn $DB_URL --interval 30s</pre>
+
+                <h3 class="text-xl font-bold mt-8">replay</h3>
+                <p>Re-enqueues a task.</p>
+                <pre>./reproq replay --id 12345</pre>
+            </section>
+
+            <section id="metrics" class="mb-16 prose prose-slate max-w-none">
+                <h2 class="text-3xl font-bold mb-6">Prometheus Monitoring</h2>
+                <p>Enable the built-in metrics exporter to monitor throughput and error rates.</p>
+                <pre># Start with metrics enabled
+./reproq worker --metrics-port 9090</pre>
+                <p>Exposed metrics include:</p>
+                <ul>
+                    <li><code>reproq_tasks_processed_total</code>: Counter of tasks by queue and status.</li>
+                    <li><code>reproq_task_duration_seconds</code>: Histogram of execution times.</li>
+                    <li>Standard Go runtime metrics (goroutines, heap, etc).</li>
+                </ul>
+            </section>
+
+            <footer class="mt-24 pt-8 border-t border-slate-200 text-slate-400 text-sm flex justify-between">
+                <div>&copy; 2025 Alejandro Peña. Released under MIT License.</div>
+                <div class="flex space-x-4">
+                    <a href="https://github.com/adpena/reproq-worker" class="hover:text-emerald-500">GitHub</a>
+                </div>
+            </footer>
+        </main>
+    </div>
+</body>
+</html>

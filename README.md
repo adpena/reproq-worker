@@ -1,5 +1,8 @@
 # Reproq Worker 🦀
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Documentation](https://img.shields.io/badge/Docs-View%20Online-emerald)](https://adpena.github.io/reproq-worker/)
+
 **The high-performance Go-based execution engine for Reproq Tasks.**
 
 Reproq Worker is a production-grade, deterministic background task runner. It polls a PostgreSQL database for tasks enqueued by Django and executes them in isolated Python processes.
