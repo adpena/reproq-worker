@@ -67,5 +67,5 @@ Registry of active worker nodes. Used for monitoring and telemetry in the Django
 ## 4. Reliability Invariants
 
 1.  **Lease Protection**: A task can only be finalized if the worker still holds a valid, non-expired lease.
-2.  **Deduplication**: The `idx_task_runs_mvp_spec_unique` unique index prevents identical tasks from being enqueued while an existing one is still active (`READY` or `RUNNING`).
+2.  **Deduplication**: The `beat` enqueue path checks for existing active tasks with the same `spec_hash` before inserting; a partial unique index can reinforce this on Postgres.
 3.  **Atomic Scheduling**: `beat` enqueues and updates the `next_run_at` in a single database transaction.

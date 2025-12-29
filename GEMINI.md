@@ -54,7 +54,7 @@ go build -o reproq ./cmd/reproq
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
 - **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `PENDING`.
-- **Concurrency Guard**: A partial unique index on `spec_hash` ensures only one active run exists per task specification.
+- **Concurrency Guard**: Dedupes via `spec_hash` checks before enqueue; a partial unique index can reinforce this in Postgres.
 
 ### Security Posture
 - **Validation**: All task module paths must be validated against an allow-list in `internal/executor/validator.go`.

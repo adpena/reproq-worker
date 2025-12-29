@@ -51,7 +51,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		    last_attempted_at = NOW(),
 		    leased_until = $2,
 		    leased_by = $3,
-		    worker_ids = array_append(worker_ids, $3),
+		    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3),
 		    updated_at = NOW()
 		FROM target
 		WHERE task_runs.result_id = target.result_id
@@ -145,7 +145,7 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 	triggerQuery = `
 		UPDATE task_runs
 		SET wait_count = wait_count - 1,
-		    status = CASE WHEN wait_count - 1 <= 0 THEN 'READY'::task_status_mvp ELSE 'WAITING'::task_status_mvp END,
+		    status = CASE WHEN wait_count - 1 <= 0 THEN 'READY' ELSE 'WAITING' END,
 		    updated_at = NOW()
 		WHERE parent_id = $1 AND status = 'WAITING'
 	`
@@ -167,7 +167,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 	query := `
 		UPDATE task_runs
 		SET status = $1,
-		    finished_at = CASE WHEN $1 = 'FAILED'::task_status_mvp THEN NOW() ELSE NULL END,
+		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    attempts = attempts + 1,
 		    errors_json = errors_json || $2::jsonb,
 		    run_after = $3,
@@ -193,7 +193,7 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE task_runs
-		SET status = CASE WHEN attempts + 1 < max_attempts THEN 'READY'::task_status_mvp ELSE 'FAILED'::task_status_mvp END,
+		SET status = CASE WHEN attempts + 1 < max_attempts THEN 'READY' ELSE 'FAILED' END,
 		    errors_json = errors_json || jsonb_build_object(
 				'kind', 'lease_expiry',
 				'message', 'Worker heartbeat lost or process crashed',
@@ -226,9 +226,13 @@ func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 }
 
 func (s *Service) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {
+	queuesJSON, err := json.Marshal(queues)
+	if err != nil {
+		return err
+	}
 	query := `
 		INSERT INTO reproq_workers (worker_id, hostname, concurrency, queues, version, started_at, last_seen_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
 		ON CONFLICT (worker_id) DO UPDATE
 		SET hostname = EXCLUDED.hostname,
 		    concurrency = EXCLUDED.concurrency,
@@ -236,7 +240,7 @@ func (s *Service) RegisterWorker(ctx context.Context, id, hostname string, concu
 		    version = EXCLUDED.version,
 		    last_seen_at = NOW()
 	`
-	_, err := s.pool.Exec(ctx, query, id, hostname, concurrency, queues, version)
+	_, err = s.pool.Exec(ctx, query, id, hostname, concurrency, queuesJSON, version)
 	return err
 }
 

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS task_runs_new (
     finished_at TIMESTAMPTZ,
     
     attempts INTEGER NOT NULL DEFAULT 0,
-    worker_ids TEXT[] DEFAULT '{}',
+    worker_ids JSONB DEFAULT '[]'::jsonb,
     
     return_json JSONB,
     errors_json JSONB DEFAULT '[]',

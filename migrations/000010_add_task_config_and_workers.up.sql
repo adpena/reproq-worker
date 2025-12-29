@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS reproq_workers (
     worker_id TEXT PRIMARY KEY,
     hostname TEXT,
     concurrency INTEGER,
-    queues TEXT[],
+    queues JSONB DEFAULT '[]'::jsonb,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     version TEXT

@@ -2,6 +2,8 @@ package queue
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,16 +12,16 @@ import (
 )
 
 type PeriodicTask struct {
-	Name         string          `db:"name"`
-	CronExpr     string          `db:"cron_expr"`
-	TaskPath     string          `db:"task_path"`
-	PayloadJSON  json.RawMessage `db:"payload_json"`
-	QueueName    string          `db:"queue_name"`
-	Priority     int             `db:"priority"`
-	MaxAttempts  int             `db:"max_attempts"`
-	LastRunAt    *time.Time      `db:"last_run_at"`
-	NextRunAt    time.Time       `db:"next_run_at"`
-	Enabled      bool            `db:"enabled"`
+	Name        string          `db:"name"`
+	CronExpr    string          `db:"cron_expr"`
+	TaskPath    string          `db:"task_path"`
+	PayloadJSON json.RawMessage `db:"payload_json"`
+	QueueName   string          `db:"queue_name"`
+	Priority    int             `db:"priority"`
+	MaxAttempts int             `db:"max_attempts"`
+	LastRunAt   *time.Time      `db:"last_run_at"`
+	NextRunAt   time.Time       `db:"next_run_at"`
+	Enabled     bool            `db:"enabled"`
 }
 
 // EnqueueDuePeriodicTasks finds tasks where next_run_at <= now, enqueues them, and schedules the next run.
@@ -62,18 +64,22 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 	for _, t := range dueTasks {
 		// 2. Enqueue the task
 		// We need to calculate a spec_hash. For periodic tasks, we can use name + next_run_at to avoid duplicates if beat runs twice.
-		specJSON := fmt.Sprintf(`{"task_path": "%s", "args": %s, "kwargs": {}, "periodic_name": "%s", "scheduled_at": "%s"}`, 
+		specJSON := fmt.Sprintf(`{"task_path": "%s", "args": %s, "kwargs": {}, "periodic_name": "%s", "scheduled_at": "%s"}`,
 			t.TaskPath, string(t.PayloadJSON), t.Name, t.NextRunAt.Format(time.RFC3339))
-		
+
 		// Use a simple hash approach or reuse existing logic if accessible.
 		// For now, let's just insert.
-		
+
+		specHashBytes := sha256.Sum256([]byte(specJSON))
+		specHash := hex.EncodeToString(specHashBytes[:])
 		insertQuery := `
 			INSERT INTO task_runs (spec_hash, queue_name, spec_json, priority, run_after, attempts, status)
-			VALUES (encode(digest($1, 'sha256'), 'hex'), $2, $3, $4, $5, 0, 'READY')
-			ON CONFLICT (spec_hash) WHERE status IN ('READY', 'RUNNING') DO NOTHING
+			SELECT $1, $2, $3, $4, $5, 0, 'READY'
+			WHERE NOT EXISTS (
+				SELECT 1 FROM task_runs WHERE spec_hash = $1 AND status IN ('READY', 'RUNNING')
+			)
 		`
-		_, err = tx.Exec(ctx, insertQuery, specJSON, t.QueueName, specJSON, t.Priority, t.NextRunAt)
+		_, err = tx.Exec(ctx, insertQuery, specHash, t.QueueName, specJSON, t.Priority, t.NextRunAt)
 		if err != nil {
 			return 0, fmt.Errorf("failed to enqueue periodic task %s: %w", t.Name, err)
 		}
@@ -112,7 +118,7 @@ func (s *Service) UpsertPeriodicTask(ctx context.Context, t PeriodicTask) error 
 	if err != nil {
 		return fmt.Errorf("invalid cron expression: %w", err)
 	}
-	
+
 	nextRun := sched.Next(time.Now())
 
 	query := `
