@@ -167,7 +167,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 	query := `
 		UPDATE task_runs
 		SET status = $1,
-		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
+		    finished_at = CASE WHEN $1 = 'FAILED'::task_status_mvp THEN NOW() ELSE NULL END,
 		    attempts = attempts + 1,
 		    errors_json = errors_json || $2::jsonb,
 		    run_after = $3,
