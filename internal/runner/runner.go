@@ -179,13 +179,17 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"worker_id":       r.cfg.WorkerID,
 		})
 		
-		shouldRetry := task.Attempts + 1 < task.MaxAttempts
+		shouldRetry := task.Attempts < task.MaxAttempts
 		
 		// Exponential backoff: 2^attempt * base_delay (e.g. 30s)
-		// 0 -> 30s
-		// 1 -> 60s
-		// 2 -> 120s
-		backoffSeconds := (1 << uint(task.Attempts)) * 30
+		// attempt_index 0 -> 30s
+		// attempt_index 1 -> 60s
+		// attempt_index 2 -> 120s
+		attemptIndex := task.Attempts - 1
+		if attemptIndex < 0 {
+			attemptIndex = 0
+		}
+		backoffSeconds := (1 << uint(attemptIndex)) * 30
 		if backoffSeconds > 3600 { // Cap at 1 hour
 			backoffSeconds = 3600
 		}

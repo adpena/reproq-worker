@@ -49,6 +49,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		SET status = 'RUNNING',
 		    started_at = COALESCE(started_at, NOW()),
 		    last_attempted_at = NOW(),
+		    attempts = attempts + 1,
 		    leased_until = $2,
 		    leased_by = $3::text,
 		    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3::text),
@@ -171,7 +172,6 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 		UPDATE task_runs
 		SET status = $1,
 		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
-		    attempts = attempts + 1,
 		    errors_json = errors_json || $2::jsonb,
 		    run_after = $3,
 		    leased_until = NULL,
@@ -196,7 +196,7 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE task_runs
-		SET status = CASE WHEN attempts + 1 < max_attempts THEN 'READY' ELSE 'FAILED' END,
+		SET status = CASE WHEN attempts < max_attempts THEN 'READY' ELSE 'FAILED' END,
 		    errors_json = errors_json || jsonb_build_object(
 				'kind', 'lease_expiry',
 				'message', 'Worker heartbeat lost or process crashed',
