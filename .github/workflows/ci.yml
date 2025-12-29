@@ -37,7 +37,9 @@ jobs:
 
     - name: Run Migrations
       run: |
-        cat migrations/*.up.sql | psql "postgres://user:pass@localhost:5432/reproq?sslmode=disable"
+        for f in $(ls -1v migrations/*.up.sql); do
+          psql "postgres://user:pass@localhost:5432/reproq?sslmode=disable" -f "$f"
+        done
       env:
         PGPASSWORD: pass
 
