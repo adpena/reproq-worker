@@ -43,7 +43,14 @@ The `.github/workflows/release.yml` should be implemented to:
 3.  Create a GitHub Release and upload all files from `dist/` as assets.
 
 ## 4. Production Supervision
-For deploying the worker itself to production servers:
-- **Systemd**: Use a unit file to manage the `reproq worker` and `reproq beat` processes.
-- **Docker**: A multi-stage `Dockerfile` is provided in the repository for containerized environments.
-- **Environment**: Ensure `DATABASE_URL` and `REPROQ_WORKER_BIN` (if using custom path) are set in the production environment.
+The preferred method for managing Reproq in production is using **systemd**.
+
+### Automated Setup (Recommended)
+Reproq Django includes a management command that automatically generates optimized service files for your specific project environment:
+
+```bash
+python manage.py reproq systemd
+```
+
+### Manual Setup
+If you prefer to write your own unit files...

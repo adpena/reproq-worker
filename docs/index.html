@@ -89,6 +89,26 @@
                 </ul>
             </section>
 
+            <section id="deployment" class="mb-16 prose prose-slate max-w-none">
+                <h2 class="text-3xl font-bold mb-6">Deployment</h2>
+                <p>For production deployment, it is recommended to use <code>systemd</code> to manage the worker and beat processes. Reproq provides an automated command to generate these service files for you:</p>
+                <pre>python manage.py reproq systemd</pre>
+                <p class="mt-4">See the <a href="https://github.com/adpena/reproq-worker/blob/main/DEPLOYMENT.md" class="text-emerald-600 font-bold">Deployment Guide</a> for manual templates and best practices.</p>
+                <p class="mt-4"><strong>Note:</strong> Reproq Worker is designed to work in tandem with <a href="https://adpena.github.io/reproq-django/" class="text-emerald-600 font-bold">Reproq Django</a>, which provides the task definition and monitoring interface.</p>
+            </section>
+
+            <section id="community" class="mb-16">
+                <h2 class="text-3xl font-bold mb-6">Join the Community</h2>
+                <div class="p-8 bg-emerald-50 border border-emerald-100 rounded-2xl font-sans text-emerald-900">
+                    <p class="font-bold mb-4 text-xl tracking-tight">We welcome contributors of all kinds!</p>
+                    <p class="mb-8 leading-relaxed text-lg text-emerald-800">Whether you are optimizing Go routines, improving SQL performance, or helping with documentation, your expertise is valued. Join us in building the most reliable task engine for the Django ecosystem.</p>
+                    <div class="flex gap-4">
+                        <a href="https://github.com/adpena/reproq-worker" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-xl shadow-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-all">GitHub Repository</a>
+                        <a href="https://github.com/adpena/reproq-worker/issues" class="inline-flex items-center px-6 py-3 border-2 border-emerald-600 text-base font-bold rounded-xl text-emerald-600 bg-white hover:bg-emerald-50 transition-all">Open an Issue</a>
+                    </div>
+                </div>
+            </section>
+
             <footer class="mt-24 pt-8 border-t border-slate-200 text-slate-400 text-sm flex justify-between">
                 <div>&copy; 2025 Alejandro Peña. Released under MIT License.</div>
                 <div class="flex space-x-4">

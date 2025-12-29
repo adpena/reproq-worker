@@ -5,7 +5,17 @@
 
 **The high-performance Go-based execution engine for Reproq Tasks.**
 
-Reproq Worker is a production-grade, deterministic background task runner. It polls a PostgreSQL database for tasks enqueued by Django and executes them in isolated Python processes.
+Reproq Worker is a production-grade, deterministic background task runner. It works in tandem with [Reproq Django](https://github.com/adpena/reproq-django) to provide a seamless background task experience for Python applications.
+
+---
+
+## 🤝 Relationship with Reproq Django
+
+Reproq is split into two specialized components:
+1. **[Reproq Django](https://github.com/adpena/reproq-django)**: The "Brain." Handles the Python-side API, task definitions, and the monitoring UI.
+2. **Reproq Worker (this repo)**: The "Muscle." A standalone Go binary that polls PostgreSQL and executes tasks in isolated processes.
+
+---
 
 ## Features
 
@@ -66,10 +76,17 @@ Re-enqueues a task for execution.
 ---
 
 ## 🧪 Development & Testing
+...
+## 🤝 Contributing & Feedback
 
-1. **Apply Migrations**: `cat migrations/*.up.sql | psql $DATABASE_URL`
-2. **Run Tests**: `go test ./internal/...`
-3. **Integration Test**: `make test-integration` (Requires Docker).
+We welcome contributions of all kinds!
+
+- **Core Logic**: Improvements to the Go polling, heartbeat, or scheduler.
+- **Performance**: Optimizations for PostgreSQL queries or process execution.
+- **Portability**: Support for more OS/Architecture targets.
+
+Please open an issue to discuss major changes before submitting a PR. We value your feedback on the worker's performance and stability.
 
 ## 📜 License
 MIT
+

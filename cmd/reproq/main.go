@@ -14,7 +14,43 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"reproq-worker/internal/config"
-...
+	"reproq-worker/internal/db"
+	"reproq-worker/internal/executor"
+	"reproq-worker/internal/logging"
+	"reproq-worker/internal/queue"
+	"reproq-worker/internal/runner"
+)
+
+const Version = "0.1.0"
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(1)
+	}
+
+	if os.Args[1] == "--version" || os.Args[1] == "version" {
+		fmt.Printf("reproq-worker version %s\n", Version)
+		return
+	}
+
+	switch os.Args[1] {
+	case "worker":
+		runWorker(os.Args[2:])
+	case "beat":
+		runBeat(os.Args[2:])
+	case "replay":
+		runReplay(os.Args[2:])
+	default:
+		usage()
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Println("usage: reproq <worker|beat|replay|version> [args]")
+}
+
 func runWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	metricsPort := fs.Int("metrics-port", 0, "Port to serve Prometheus metrics (0 to disable)")
@@ -81,7 +117,8 @@ func runBeat(args []string) {
 	defer pool.Close()
 
 	q := queue.NewService(pool)
-	fmt.Printf("Starting reproq beat (interval: %v)...\n", *interval)
+	fmt.Printf("Starting reproq beat (interval: %v)...
+", *interval)
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
