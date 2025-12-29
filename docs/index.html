@@ -59,6 +59,7 @@
 
                 <h4 class="font-bold mt-4">Cross-Platform Binaries</h4>
                 <p>Download from the <a href="https://github.com/adpena/reproq-worker/releases" class="text-emerald-600">Releases page</a>. Binaries follow the pattern <code>reproq-{os}-{arch}</code>.</p>
+                <p class="mt-4 text-sm text-slate-600"><strong>Schema note:</strong> Reproq Worker expects JSONB columns for <code>task_runs.worker_ids</code> and <code>reproq_workers.queues</code>. If you previously applied legacy SQL migrations that created array columns, run <code>migrations/000013_convert_worker_arrays_to_jsonb.up.sql</code> from the reproq-worker repo.</p>
             </section>
 
             <section id="commands" class="mb-16 prose prose-slate max-w-none">
