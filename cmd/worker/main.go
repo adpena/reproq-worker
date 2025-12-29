@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -15,6 +17,11 @@ import (
 )
 
 func main() {
+	// CLI Flags
+	requeueID := flag.Int64("requeue-id", 0, "Re-enqueue a task by its ID")
+	requeueHash := flag.String("requeue-hash", "", "Re-enqueue a task by its SpecHash")
+	flag.Parse()
+
 	// 1. Config
 	cfg, err := config.Load()
 	if err != nil {
@@ -23,7 +30,7 @@ func main() {
 
 	// 2. Logging
 	logger := logging.Init(cfg.WorkerID)
-	logger.Info("Initializing worker...", "config", cfg)
+	// If simply running a CLI command, maybe reduce log noise? Keeping it standard for now.
 
 	// 3. Database
 	ctx := context.Background()
@@ -34,8 +41,32 @@ func main() {
 	}
 	defer pool.Close()
 
-	// 4. Components
 	qService := queue.NewService(pool)
+
+	// Handle Requeue CLI commands
+	if *requeueID != 0 {
+		newID, err := qService.Requeue(ctx, *requeueID)
+		if err != nil {
+			logger.Error("Failed to requeue task", "id", *requeueID, "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Successfully requeued task", "old_id", *requeueID, "new_id", newID)
+		return
+	}
+
+	if *requeueHash != "" {
+		newID, err := qService.RequeueByHash(ctx, *requeueHash)
+		if err != nil {
+			logger.Error("Failed to requeue task", "hash", *requeueHash, "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Successfully requeued task", "hash", *requeueHash, "new_id", newID)
+		return
+	}
+
+	logger.Info("Initializing worker...", "config", cfg)
+
+	// 4. Components
 	execService := executor.New(cfg.PythonCommand)
 	runService := runner.New(cfg, qService, execService, logger)
 

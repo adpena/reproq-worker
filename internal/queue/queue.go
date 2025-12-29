@@ -119,6 +119,57 @@ func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON 
 	return err
 }
 
+// Requeue creates a new PENDING task based on an existing task's ID.
+// It copies the immutable fields (spec_hash, payload, etc.) to a new row.
+func (s *Service) Requeue(ctx context.Context, taskID int64) (int64, error) {
+	query := `
+		INSERT INTO task_runs (
+			spec_hash, queue_name, status, priority, run_after, 
+			payload_json, max_attempts, created_at, updated_at
+		)
+		SELECT 
+			spec_hash, queue_name, 'PENDING', priority, NOW(),
+			payload_json, max_attempts, NOW(), NOW()
+		FROM task_runs
+		WHERE id = $1
+		RETURNING id
+	`
+	var newID int64
+	err := s.pool.QueryRow(ctx, query, taskID).Scan(&newID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to requeue task %d: %w", taskID, err)
+	}
+	return newID, nil
+}
+
+// RequeueByHash creates a new PENDING task based on a spec_hash.
+// It uses the most recent task with that hash as the template.
+func (s *Service) RequeueByHash(ctx context.Context, specHash string) (int64, error) {
+	query := `
+		INSERT INTO task_runs (
+			spec_hash, queue_name, status, priority, run_after, 
+			payload_json, max_attempts, created_at, updated_at
+		)
+		SELECT 
+			spec_hash, queue_name, 'PENDING', priority, NOW(),
+			payload_json, max_attempts, NOW(), NOW()
+		FROM task_runs
+		WHERE spec_hash = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+		RETURNING id
+	`
+	var newID int64
+	err := s.pool.QueryRow(ctx, query, specHash).Scan(&newID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("no task found with hash %s", specHash)
+		}
+		return 0, fmt.Errorf("failed to requeue hash %s: %w", specHash, err)
+	}
+	return newID, nil
+}
+
 // CompleteFailure marks a task as FAILED or schedules a retry.
 func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON json.RawMessage, shouldRetry bool, nextRunAfter time.Time) error {
 	var status models.TaskStatus
