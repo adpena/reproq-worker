@@ -8,9 +8,9 @@ Users need to prevent overwhelming external APIs or internal resources. A burst 
 - Update the `Claim` query to check if a task's `queue_name` or `task_path` has exceeded its allocated limit in the current window.
 
 ## Implementation Checklist
-- [ ] Migration: Create `rate_limits` table (`key`, `tokens_per_second`, `burst_size`).
-- [ ] Logic: Update `internal/queue/Service.Claim` to incorporate rate limit checks via SQL.
-- [ ] CLI: Add `reproq limit set <key> <rate>` command.
+- [x] Migration: Create `rate_limits` table (`key`, `tokens_per_second`, `burst_size`).
+- [x] Logic: Update `internal/queue/Service.Claim` to incorporate rate limit checks via SQL.
+- [x] CLI: Add `reproq limit set <key> <rate>` command.
 
 ## References
 - Token Bucket algorithm.

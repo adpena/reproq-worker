@@ -42,6 +42,8 @@ func main() {
 		runTorture(os.Args[2:])
 	case "triage":
 		runTriage(os.Args[2:])
+	case "limit":
+		runLimit(os.Args[2:])
 	default:
 		fmt.Printf("unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -211,6 +213,45 @@ func runTorture(args []string) {
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	fs.Parse(args)
 	fmt.Println("Torture test would run here against DSN:", *dsn)
+}
+
+func runLimit(args []string) {
+	if len(args) < 1 {
+		fmt.Println("usage: reproq limit <set> [args]")
+		os.Exit(1)
+	}
+
+	fs := flag.NewFlagSet("limit", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	key := fs.String("key", "", "Limit key (e.g. 'global' or 'queue:default')")
+	rate := fs.Float64("rate", 10.0, "Tokens per second")
+	burst := fs.Int("burst", 20, "Burst size")
+	fs.Parse(args[1:])
+
+	if *dsn == "" || *key == "" {
+		log.Fatal("DATABASE_URL and --key are required")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	query := `
+		INSERT INTO rate_limits (key, tokens_per_second, burst_size, current_tokens)
+		VALUES ($1, $2, $3, $3)
+		ON CONFLICT (key) DO UPDATE
+		SET tokens_per_second = EXCLUDED.tokens_per_second,
+		    burst_size = EXCLUDED.burst_size,
+		    current_tokens = LEAST(rate_limits.current_tokens, EXCLUDED.burst_size)
+	`
+	_, err = pool.Exec(ctx, query, *key, *rate, *burst)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Successfully set limit for %s: %.2f tokens/sec (burst %d)\n", *key, *rate, *burst)
 }
 
 func runTriage(args []string) {

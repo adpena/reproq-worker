@@ -22,29 +22,54 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 // Claim polls for a pending task and atomically transitions it to RUNNING.
-// It uses a single CTE to claim the task in one network round-trip.
+// It uses a single CTE to claim the task and update rate limits in one network round-trip.
 func (s *Service) Claim(ctx context.Context, queueName string, workerID string, leaseDuration time.Duration) (*TaskRun, error) {
 	now := time.Now()
 	leasedUntil := now.Add(leaseDuration)
 
+	// We check for two limit keys: 'global' and 'queue:<name>'
+	queueLimitKey := "queue:" + queueName
+
 	query := `
-		WITH target AS (
-			SELECT id 
-			FROM task_runs
-			WHERE queue_name = $1
-			  AND status = 'PENDING'
-			  AND run_after <= NOW()
-			ORDER BY priority DESC, created_at ASC
+		WITH 
+		limits AS (
+			-- Atomic Token Bucket Update
+			UPDATE rate_limits
+			SET current_tokens = LEAST(
+					burst_size, 
+					current_tokens + (tokens_per_second * EXTRACT(EPOCH FROM (NOW() - last_refilled_at)))
+				) - 1,
+				last_refilled_at = NOW()
+			WHERE key IN ('global', $1)
+			  AND (
+				current_tokens + (tokens_per_second * EXTRACT(EPOCH FROM (NOW() - last_refilled_at)))
+			  ) >= 1
+			RETURNING key, current_tokens
+		),
+		can_proceed AS (
+			-- We proceed ONLY if we managed to decrement ALL matching limit keys
+			-- If only 1 exists, we need 1. If 2 exist, we need 2.
+			SELECT count(*) as count FROM limits
+			WHERE key IN ('global', $1)
+		),
+		target AS (
+			SELECT t.id 
+			FROM task_runs t, can_proceed cp
+			WHERE t.queue_name = $2
+			  AND t.status = 'PENDING'
+			  AND t.run_after <= NOW()
+			  AND cp.count >= (SELECT count(*) FROM rate_limits WHERE key IN ('global', $1))
+			ORDER BY t.priority DESC, t.created_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE task_runs
 		SET status = 'RUNNING',
-		    worker_id = $2,
-		    started_at = $3,
-		    leased_until = $4,
+		    worker_id = $3,
+		    started_at = $4,
+		    leased_until = $5,
 		    attempt_count = attempt_count + 1,
-		    updated_at = $3
+		    updated_at = $4
 		FROM target
 		WHERE task_runs.id = target.id
 		RETURNING 
@@ -56,7 +81,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 	`
 
 	var task TaskRun
-	err := s.pool.QueryRow(ctx, query, queueName, workerID, now, leasedUntil).Scan(
+	err := s.pool.QueryRow(ctx, query, queueLimitKey, queueName, workerID, now, leasedUntil).Scan(
 		&task.ID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
 		&task.Stdout, &task.Stderr, &task.ExitCode,
