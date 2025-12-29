@@ -95,14 +95,23 @@ func TestRetryLifecycle(t *testing.T) {
 
 	// Enqueue with max_attempts = 2
 	var id int64
-	pool.QueryRow(ctx, `
+	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
 		VALUES ('retryhash64000000000000000000000000000000000000000000000000000000', 'default', '{}', 'READY', NOW(), 2)
 		RETURNING result_id
-	`, ).Scan(&id)
+	`).Scan(&id)
+	if err != nil {
+		t.Fatalf("failed to enqueue retry task: %v", err)
+	}
 
 	// Claim and Fail (Attempt 1)
-	task, _ := s.Claim(ctx, "w1", "default", 60)
+	task, err := s.Claim(ctx, "w1", "default", 60)
+	if err != nil {
+		t.Fatalf("failed to claim task for retry: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected task, got nil")
+	}
 	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -116,9 +125,15 @@ func TestRetryLifecycle(t *testing.T) {
 	}
 
 	// Claim and Fail (Attempt 2 - exhausted)
-	task, _ = s.Claim(ctx, "w2", "default", 60)
+	task, err = s.Claim(ctx, "w2", "default", 60)
+	if err != nil {
+		t.Fatalf("failed to claim retry task attempt 2: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected task on attempt 2, got nil")
+	}
 	err = s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now())
-	
+
 	pool.QueryRow(ctx, "SELECT status FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&status)
 	if status != "FAILED" {
 		t.Errorf("expected FAILED after exhaustion, got %s", status)
