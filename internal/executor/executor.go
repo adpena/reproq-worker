@@ -42,7 +42,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"-", "m", e.ExecutorModule, "--result-id", fmt.Sprintf("%d", resultID), "--attempt", fmt.Sprintf("%d", attempt)}
+	args := []string{"-m", e.ExecutorModule, "--result-id", fmt.Sprintf("%d", resultID), "--attempt", fmt.Sprintf("%d", attempt)}
 	
 	var tempFile *os.File
 	var err error
