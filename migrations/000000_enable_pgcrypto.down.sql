@@ -1,0 +1,2 @@
+-- Extension removal is usually not desired in shared DBs, but for completeness:
+-- DROP EXTENSION IF EXISTS pgcrypto;

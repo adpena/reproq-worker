@@ -8,9 +8,9 @@ Users need to run tasks at regular intervals (e.g., every Monday at 8 AM) withou
 - Create a `reproq beat` subcommand that monitors these specs and enqueues new `task_runs` when the schedule is due.
 
 ## Implementation Checklist
-- [ ] Migration: Create `periodic_tasks` table (`name`, `cron_expr`, `task_path`, `payload`, `last_run_at`).
-- [ ] Logic: Implement cron parser and "next run" calculator.
-- [ ] CLI: Implement `reproq beat` loop.
+- [x] Migration: Create `periodic_tasks` table (`name`, `cron_expr`, `task_path`, `payload`, `last_run_at`).
+- [x] Logic: Implement cron parser and "next run" calculator.
+- [x] CLI: Implement `reproq beat` loop.
 
 ## References
 - `robfig/cron` (Go library).

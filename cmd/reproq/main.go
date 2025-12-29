@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,10 @@ func main() {
 		runLimit(os.Args[2:])
 	case "cancel":
 		runCancel(os.Args[2:])
+	case "beat":
+		runBeat(os.Args[2:])
+	case "schedule":
+		runSchedule(os.Args[2:])
 	default:
 		fmt.Printf("unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -215,6 +220,87 @@ func runTorture(args []string) {
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	fs.Parse(args)
 	fmt.Println("Torture test would run here against DSN:", *dsn)
+}
+
+func runBeat(args []string) {
+	fs := flag.NewFlagSet("beat", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	interval := fs.Duration("interval", 10*time.Second, "Polling interval")
+	fs.Parse(args)
+
+	if *dsn == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pool, err := db.NewPool(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+	log.Printf("Starting reproq beat (polling every %v)", *interval)
+
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	for {
+		select {
+		case <-sigChan:
+			log.Println("Beat shutting down...")
+			return
+		case <-ticker.C:
+			count, err := q.EnqueueDuePeriodicTasks(ctx)
+			if err != nil {
+				log.Printf("Error enqueuing periodic tasks: %v", err)
+			} else if count > 0 {
+				log.Printf("Enqueued %d periodic tasks", count)
+			}
+		}
+	}
+}
+
+func runSchedule(args []string) {
+	fs := flag.NewFlagSet("schedule", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	name := fs.String("name", "", "Task name")
+	cron := fs.String("cron", "", "Cron expression (e.g. '*/5 * * * *')")
+	task := fs.String("task", "", "Task path")
+	payload := fs.String("payload", "{}", "JSON payload")
+	queueName := fs.String("queue", "default", "Queue name")
+	fs.Parse(args)
+
+	if *dsn == "" || *name == "" || *cron == "" || *task == "" {
+		log.Fatal("DSN, --name, --cron, and --task are required")
+	}
+
+	ctx := context.Background()
+	pool, err := db.NewPool(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+	err = q.UpsertPeriodicTask(ctx, queue.PeriodicTask{
+		Name:        *name,
+		CronExpr:    *cron,
+		TaskPath:    *task,
+		PayloadJSON: json.RawMessage(*payload),
+		QueueName:   *queueName,
+		Enabled:     true,
+		MaxAttempts: 3,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Successfully scheduled periodic task: %s\n", *name)
 }
 
 func runCancel(args []string) {
