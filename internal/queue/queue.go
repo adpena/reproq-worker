@@ -50,8 +50,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		    started_at = COALESCE(started_at, NOW()),
 		    last_attempted_at = NOW(),
 		    leased_until = $2,
-		    leased_by = $3,
-		    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3),
+		    leased_by = $3::text,
+		    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3::text),
 		    updated_at = NOW()
 		FROM target
 		WHERE task_runs.result_id = target.result_id
