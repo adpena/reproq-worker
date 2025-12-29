@@ -74,9 +74,10 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 		specHash := hex.EncodeToString(specHashBytes[:])
 		insertQuery := `
 			INSERT INTO task_runs (spec_hash, queue_name, spec_json, priority, run_after, attempts, status)
-			SELECT $1, $2, $3, $4, $5, 0, 'READY'
+			SELECT $1::varchar(64), $2::text, $3::jsonb, $4::int, $5::timestamptz, 0, 'READY'
 			WHERE NOT EXISTS (
-				SELECT 1 FROM task_runs WHERE spec_hash = $1 AND status IN ('READY', 'RUNNING')
+				SELECT 1 FROM task_runs
+				WHERE spec_hash = $1::varchar(64) AND status IN ('READY', 'RUNNING')
 			)
 		`
 		_, err = tx.Exec(ctx, insertQuery, specHash, t.QueueName, specJSON, t.Priority, t.NextRunAt)
