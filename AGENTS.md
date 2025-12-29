@@ -25,4 +25,7 @@ GOOS=windows GOARCH=amd64 go build -o reproq-windows-amd64.exe ./cmd/reproq
 ```
 
 ## Integration Consistency
-Ensure that any changes to `internal/queue/models.go` are reflected in the Django `TaskRun` model in `reproq-django/src/reproq_django/models.py`. The two must remain in sync to prevent serialization errors.
+- **Versioning**: When logic changes, increment the `Version` constant in `cmd/reproq/main.go`.
+- **Validation**: Ensure `reproq --version` returns the expected string.
+- **Model Sync**: Any changes to `internal/queue/models.go` must be mirrored in `reproq-django/src/reproq_django/models.py`.
+- **Protocol**: The JSON contract between the Go worker and `python -m reproq_django.executor` is strict. Changes must be applied to both simultaneously.
