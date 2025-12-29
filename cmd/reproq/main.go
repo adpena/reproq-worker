@@ -40,6 +40,8 @@ func main() {
 		runVerify(os.Args[2:])
 	case "torture":
 		runTorture(os.Args[2:])
+	case "triage":
+		runTriage(os.Args[2:])
 	default:
 		fmt.Printf("unknown command: %s\n", os.Args[1])
 		os.Exit(1)
@@ -205,10 +207,67 @@ func runVerify(args []string) {
 }
 
 func runTorture(args []string) {
-	// Simple integration of torture logic
 	fs := flag.NewFlagSet("torture", flag.ExitOnError)
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	fs.Parse(args)
-	// (Torture logic omitted for brevity in this example, but would follow the same pattern)
 	fmt.Println("Torture test would run here against DSN:", *dsn)
+}
+
+func runTriage(args []string) {
+	if len(args) < 1 {
+		fmt.Println("usage: reproq triage <list|retry> [args]")
+		os.Exit(1)
+	}
+
+	fs := flag.NewFlagSet("triage", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	limit := fs.Int("limit", 20, "Limit for list")
+	taskID := fs.Int64("id", 0, "Task ID for retry")
+	fs.Parse(args[1:])
+
+	if *dsn == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+
+	switch args[0] {
+	case "list":
+		tasks, err := q.ListFailed(ctx, *limit)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%-10s %-20s %-30s %-20s\n", "ID", "Queue", "Last Error", "Failed At")
+		for _, t := range tasks {
+			failedAt := "N/A"
+			if t.FailedAt != nil {
+				failedAt = t.FailedAt.Format(time.RFC3339)
+			}
+			errMsg := "N/A"
+			if t.LastError != nil {
+				errMsg = *t.LastError
+				if len(errMsg) > 27 {
+					errMsg = errMsg[:27] + "..."
+				}
+			}
+			fmt.Printf("%-10d %-20s %-30s %-20s\n", t.ID, t.QueueName, errMsg, failedAt)
+		}
+	case "retry":
+		if *taskID == 0 {
+			log.Fatal("Task --id is required for retry")
+		}
+		if err := q.RetryFailed(ctx, *taskID); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("Successfully scheduled task %d for retry\n", *taskID)
+	default:
+		fmt.Printf("unknown triage command: %s\n", args[0])
+	}
 }

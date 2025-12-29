@@ -51,7 +51,8 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 			task_runs.id, spec_hash, queue_name, status, priority, run_after, 
 			leased_until, worker_id, payload_json, result_json, error_json, 
 			stdout, stderr, exit_code,
-			attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
+			attempt_count, max_attempts, created_at, updated_at, started_at, completed_at,
+			failed_at, last_error
 	`
 
 	var task TaskRun
@@ -60,6 +61,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
 		&task.Stdout, &task.Stderr, &task.ExitCode,
 		&task.AttemptCount, &task.MaxAttempts, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.CompletedAt,
+		&task.FailedAt, &task.LastError,
 	)
 
 	if err != nil {
@@ -137,6 +139,7 @@ func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, workerID st
 func (s *Service) CompleteFailure(ctx context.Context, taskID int64, workerID string, errorJSON json.RawMessage, stdout, stderr string, exitCode int, shouldRetry bool, nextRunAfter time.Time) error {
 	var status TaskStatus
 	var runAfter time.Time
+	var failedAt *time.Time
 	
 	if shouldRetry {
 		status = StatusPending
@@ -144,6 +147,8 @@ func (s *Service) CompleteFailure(ctx context.Context, taskID int64, workerID st
 	} else {
 		status = StatusFailed
 		runAfter = time.Now()
+		now := time.Now()
+		failedAt = &now
 	}
 
 	query := `
@@ -155,16 +160,75 @@ func (s *Service) CompleteFailure(ctx context.Context, taskID int64, workerID st
 		    exit_code = $5,
 		    run_after = $6,
 		    completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
+		    failed_at = $7,
+		    last_error = $8,
 		    updated_at = NOW()
-		WHERE id = $7 
-		  AND worker_id = $8 
+		WHERE id = $9 
+		  AND worker_id = $10 
 		  AND status = 'RUNNING'
 	`
-	res, err := s.pool.Exec(ctx, query, status, errorJSON, stdout, stderr, exitCode, runAfter, taskID, workerID)
+	// Extract a human readable error from errorJSON if possible
+	lastError := "unknown error"
+	var errData map[string]interface{}
+	if err := json.Unmarshal(errorJSON, &errData); err == nil {
+		if msg, ok := errData["message"].(string); ok {
+			lastError = msg
+		}
+	}
+
+	res, err := s.pool.Exec(ctx, query, status, errorJSON, stdout, stderr, exitCode, runAfter, failedAt, lastError, taskID, workerID)
 	if err == nil && res.RowsAffected() == 0 {
 		return fmt.Errorf("fencing failure: task %d is no longer owned by worker %s or is not in RUNNING state", taskID, workerID)
 	}
 	return err
+}
+
+// ListFailed returns tasks that are in FAILED state.
+func (s *Service) ListFailed(ctx context.Context, limit int) ([]TaskRun, error) {
+	query := `
+		SELECT id, spec_hash, queue_name, status, last_error, failed_at, attempt_count
+		FROM task_runs
+		WHERE status = 'FAILED'
+		ORDER BY failed_at DESC
+		LIMIT $1
+	`
+	rows, err := s.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []TaskRun
+	for rows.Next() {
+		var t TaskRun
+		if err := rows.Scan(&t.ID, &t.SpecHash, &t.QueueName, &t.Status, &t.LastError, &t.FailedAt, &t.AttemptCount); err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, nil
+}
+
+// RetryFailed resets a failed task to PENDING.
+func (s *Service) RetryFailed(ctx context.Context, taskID int64) error {
+	query := `
+		UPDATE task_runs
+		SET status = 'PENDING',
+		    attempt_count = 0,
+		    failed_at = NULL,
+		    last_error = NULL,
+		    run_after = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1 AND status = 'FAILED'
+	`
+	res, err := s.pool.Exec(ctx, query, taskID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("task %d not found or not in FAILED state", taskID)
+	}
+	return nil
 }
 
 // Requeue creates a new PENDING task based on an existing task's ID.
