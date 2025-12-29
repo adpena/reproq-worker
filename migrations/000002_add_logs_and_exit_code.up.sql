@@ -1,4 +1,0 @@
-ALTER TABLE task_runs 
-ADD COLUMN stdout TEXT,
-ADD COLUMN stderr TEXT,
-ADD COLUMN exit_code INTEGER;

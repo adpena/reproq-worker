@@ -1,4 +1,0 @@
-ALTER TABLE task_runs 
-DROP COLUMN IF EXISTS stdout,
-DROP COLUMN IF EXISTS stderr,
-DROP COLUMN IF EXISTS exit_code;

@@ -1,3 +1,0 @@
-ALTER TABLE task_runs 
-DROP COLUMN IF EXISTS failed_at,
-DROP COLUMN IF EXISTS last_error;
