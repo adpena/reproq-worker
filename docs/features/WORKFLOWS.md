@@ -8,10 +8,10 @@ Complex business logic often requires tasks to run in a specific order (Chains) 
 - Tasks in a chain stay in a `WAITING` state until their parent is `SUCCESSFUL`.
 
 ## Implementation Checklist
-- [ ] Migration: Add `parent_id` column and `WAITING` status to `task_status` enum.
-- [ ] Logic: Update `Claim` to exclude `WAITING` tasks.
-- [ ] Logic: Update `CompleteSuccess` to trigger downstream tasks (transition from `WAITING` to `PENDING`).
-- [ ] API: Add helper for enqueuing chains.
+- [x] Migration: Add `parent_id` column and `WAITING` status to `task_status` enum.
+- [x] Logic: Update `Claim` to exclude `WAITING` tasks.
+- [x] Logic: Update `CompleteSuccess` to trigger downstream tasks (transition from `WAITING` to `PENDING`).
+- [x] API: Add helper for enqueuing chains.
 
 ## References
 - Celery Canvas (Chains, Groups, Chords).

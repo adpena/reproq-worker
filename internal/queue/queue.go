@@ -73,7 +73,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 		FROM target
 		WHERE task_runs.id = target.id
 		RETURNING 
-			task_runs.id, spec_hash, queue_name, status, priority, run_after, 
+			task_runs.id, parent_id, spec_hash, queue_name, status, priority, run_after, 
 			leased_until, worker_id, payload_json, result_json, error_json, 
 			stdout, stderr, exit_code,
 			attempt_count, max_attempts, created_at, updated_at, started_at, completed_at,
@@ -82,7 +82,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 
 	var task TaskRun
 	err := s.pool.QueryRow(ctx, query, queueLimitKey, queueName, workerID, now, leasedUntil).Scan(
-		&task.ID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
+		&task.ID, &task.ParentID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
 		&task.Stdout, &task.Stderr, &task.ExitCode,
 		&task.AttemptCount, &task.MaxAttempts, &task.CreatedAt, &task.UpdatedAt, &task.StartedAt, &task.CompletedAt,
@@ -137,8 +137,14 @@ func (s *Service) Heartbeat(ctx context.Context, taskID int64, duration time.Dur
 }
 
 // CompleteSuccess marks a task as SUCCESSFUL and stores the result.
-// It uses fencing to ensure only the current lease holder can commit the result.
+// It uses fencing and atomically unlocks any child tasks waiting on this task.
 func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, workerID string, resultJSON json.RawMessage, stdout, stderr string, exitCode int) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	query := `
 		UPDATE task_runs
 		SET status = 'SUCCESSFUL',
@@ -152,11 +158,28 @@ func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, workerID st
 		  AND worker_id = $6 
 		  AND status = 'RUNNING'
 	`
-	res, err := s.pool.Exec(ctx, query, resultJSON, stdout, stderr, exitCode, taskID, workerID)
-	if err == nil && res.RowsAffected() == 0 {
+	res, err := tx.Exec(ctx, query, resultJSON, stdout, stderr, exitCode, taskID, workerID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
 		return fmt.Errorf("fencing failure: task %d is no longer owned by worker %s or is not in RUNNING state", taskID, workerID)
 	}
-	return err
+
+	// Unlock children
+	childQuery := `
+		UPDATE task_runs
+		SET status = 'PENDING',
+		    run_after = NOW(),
+		    updated_at = NOW()
+		WHERE parent_id = $1 AND status = 'WAITING'
+	`
+	_, err = tx.Exec(ctx, childQuery, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to unlock children: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CompleteFailure marks a task as FAILED or schedules a retry.

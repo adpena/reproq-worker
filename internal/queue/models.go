@@ -14,10 +14,12 @@ const (
 	StatusFailed     TaskStatus = "FAILED"
 	StatusRetrying   TaskStatus = "RETRYING"
 	StatusCancelled  TaskStatus = "CANCELLED"
+	StatusWaiting    TaskStatus = "WAITING"
 )
 
 type TaskRun struct {
 	ID           int64           `db:"id"`
+	ParentID     *int64          `db:"parent_id"`
 	SpecHash     string          `db:"spec_hash"`
 	QueueName    string          `db:"queue_name"`
 	Status       TaskStatus      `db:"status"`
