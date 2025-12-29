@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,11 +96,12 @@ func TestRetryLifecycle(t *testing.T) {
 
 	// Enqueue with max_attempts = 2
 	var id int64
+	specHash := "retryhash" + strings.Repeat("0", 55)
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
-		VALUES ('retryhash64000000000000000000000000000000000000000000000000000000', 'default', '{}', 'READY', NOW(), 2)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), 2)
 		RETURNING result_id
-	`).Scan(&id)
+	`, specHash).Scan(&id)
 	if err != nil {
 		t.Fatalf("failed to enqueue retry task: %v", err)
 	}
