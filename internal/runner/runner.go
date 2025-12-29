@@ -51,6 +51,32 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.logger.Warn("Failed to register worker", "error", err)
 	}
 
+	if r.cfg.ReclaimIntervalSeconds > 0 {
+		if reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault); err != nil {
+			r.logger.Warn("Failed to reclaim expired tasks", "error", err)
+		} else if reclaimed > 0 {
+			r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
+		}
+
+		go func() {
+			ticker := time.NewTicker(time.Duration(r.cfg.ReclaimIntervalSeconds) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault)
+					if err != nil {
+						r.logger.Warn("Failed to reclaim expired tasks", "error", err)
+					} else if reclaimed > 0 {
+						r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
+					}
+				}
+			}
+		}()
+	}
+
 	// Worker Heartbeat
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -146,7 +172,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 	}
 
 	env, _, _, err := r.executor.Execute(execCtx, task.ResultID, task.Attempts, task.SpecJSON, r.cfg.ExecTimeout)
-	
+
 	completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer compCancel()
 
@@ -178,9 +204,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":              time.Now(),
 			"worker_id":       r.cfg.WorkerID,
 		})
-		
+
 		shouldRetry := task.Attempts < task.MaxAttempts
-		
+
 		// Exponential backoff: 2^attempt * base_delay (e.g. 30s)
 		// attempt_index 0 -> 30s
 		// attempt_index 1 -> 60s
@@ -193,7 +219,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		if backoffSeconds > 3600 { // Cap at 1 hour
 			backoffSeconds = 3600
 		}
-		
+
 		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun)
 	}

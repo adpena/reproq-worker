@@ -21,7 +21,7 @@ import (
 	"reproq-worker/internal/runner"
 )
 
-const Version = "0.0.106"
+const Version = "0.0.107"
 
 func main() {
 	if len(os.Args) < 2 {

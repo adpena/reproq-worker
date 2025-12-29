@@ -196,7 +196,7 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE task_runs
-		SET status = CASE WHEN attempts < max_attempts THEN 'READY' ELSE 'FAILED' END,
+		SET status = CASE WHEN attempts < COALESCE(max_attempts, $1) THEN 'READY' ELSE 'FAILED' END,
 		    errors_json = errors_json || jsonb_build_object(
 				'kind', 'lease_expiry',
 				'message', 'Worker heartbeat lost or process crashed',
@@ -208,7 +208,7 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 		FROM expired
 		WHERE task_runs.result_id = expired.result_id
 	`
-	tag, err := s.pool.Exec(ctx, query)
+	tag, err := s.pool.Exec(ctx, query, maxAttemptsDefault)
 	if err != nil {
 		return 0, err
 	}

@@ -8,52 +8,47 @@ import (
 )
 
 type Config struct {
+	DatabaseURL string
 
-	DatabaseURL     string
+	WorkerID string
 
-	WorkerID        string
+	QueueNames []string
 
-	QueueNames      []string
+	MaxConcurrency int
 
-	MaxConcurrency  int
+	PollMinBackoff time.Duration
 
-	PollMinBackoff  time.Duration
+	PollMaxBackoff time.Duration
 
-	PollMaxBackoff  time.Duration
-
-	LeaseSeconds    int
+	LeaseSeconds int
 
 	HeartbeatSeconds int
 
-	
+	ReclaimIntervalSeconds int
 
-	PythonBin       string
+	PythonBin string
 
-	ExecutorModule  string
+	ExecutorModule string
 
-	PayloadMode     string // "stdin", "file", "inline"
+	PayloadMode string // "stdin", "file", "inline"
 
 	MaxPayloadBytes int
 
-	MaxStdoutBytes  int
+	MaxStdoutBytes int
 
-	MaxStderrBytes  int
+	MaxStderrBytes int
 
-	ExecTimeout     time.Duration
-
-	
+	ExecTimeout time.Duration
 
 	MaxAttemptsDefault int
 
-	ShutdownTimeout    time.Duration
+	ShutdownTimeout time.Duration
 
-	HealthAddr         string        // HTTP address for health/metrics
+	HealthAddr string // HTTP address for health/metrics
 
-	PriorityAgingFactor float64       // How many seconds of waiting equals 1 priority point
+	PriorityAgingFactor float64 // How many seconds of waiting equals 1 priority point
 
 }
-
-
 
 func (c *Config) BindFlags(fs *flag.FlagSet) {
 
@@ -67,11 +62,11 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.IntVar(&c.HeartbeatSeconds, "heartbeat-seconds", c.HeartbeatSeconds, "Heartbeat interval")
 
+	fs.IntVar(&c.ReclaimIntervalSeconds, "reclaim-interval-seconds", c.ReclaimIntervalSeconds, "Reclaim interval for expired leases (0 to disable)")
+
 	fs.StringVar(&c.PayloadMode, "payload-mode", c.PayloadMode, "Payload mode: stdin|file|inline")
 
 }
-
-
 
 func Load() (*Config, error) {
 
@@ -83,8 +78,6 @@ func Load() (*Config, error) {
 
 	}
 
-
-
 	workerID := os.Getenv("WORKER_ID")
 
 	if workerID == "" {
@@ -95,8 +88,6 @@ func Load() (*Config, error) {
 
 	}
 
-
-
 	healthAddr := os.Getenv("HEALTH_ADDR")
 
 	if healthAddr == "" {
@@ -105,56 +96,49 @@ func Load() (*Config, error) {
 
 	}
 
-
-
 	c := &Config{
 
-		DatabaseURL:        dbURL,
+		DatabaseURL: dbURL,
 
-		WorkerID:           workerID,
+		WorkerID: workerID,
 
-		QueueNames:         []string{"default"},
+		QueueNames: []string{"default"},
 
-		MaxConcurrency:     10,
+		MaxConcurrency: 10,
 
-		PollMinBackoff:     100 * time.Millisecond,
+		PollMinBackoff: 100 * time.Millisecond,
 
-		PollMaxBackoff:     5 * time.Second,
+		PollMaxBackoff: 5 * time.Second,
 
-		LeaseSeconds:       300,
+		LeaseSeconds: 300,
 
-		HeartbeatSeconds:   60,
+		HeartbeatSeconds: 60,
 
-		PythonBin:          "python3",
+		ReclaimIntervalSeconds: 60,
 
-		ExecutorModule:     "reproq_django.executor",
+		PythonBin: "python3",
 
-		PayloadMode:        "stdin",
+		ExecutorModule: "reproq_django.executor",
 
-		MaxPayloadBytes:    1024 * 1024,
+		PayloadMode: "stdin",
 
-		MaxStdoutBytes:     1024 * 1024,
+		MaxPayloadBytes: 1024 * 1024,
 
-		MaxStderrBytes:     1024 * 1024,
+		MaxStdoutBytes: 1024 * 1024,
 
-		ExecTimeout:        1 * time.Hour,
+		MaxStderrBytes: 1024 * 1024,
+
+		ExecTimeout: 1 * time.Hour,
 
 		MaxAttemptsDefault: 3,
 
-		ShutdownTimeout:    30 * time.Second,
+		ShutdownTimeout: 30 * time.Second,
 
-		HealthAddr:         healthAddr,
+		HealthAddr: healthAddr,
 
 		PriorityAgingFactor: 60.0,
-
 	}
-
-
 
 	return c, nil
 
 }
-
-
-
-
