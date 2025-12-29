@@ -114,7 +114,7 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task, got nil")
 	}
-	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(time.Minute))
+	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(-time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
