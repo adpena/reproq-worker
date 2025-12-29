@@ -22,10 +22,15 @@ The project follows a modular Go structure:
 
 ### Key Commands
 - **Build**: `go build -o reproq ./cmd/reproq`
-- **Run Worker**: `./reproq worker --dsn "postgres://user:pass@localhost:5432/reproq"`
-- **Load Testing**: `./reproq loadgen --tasks 10000`
+- **Run Worker**: `./reproq worker --dsn "postgres://..."`
+- **Triage Failures**: `./reproq triage list`
+- **Schedule Task**: `./reproq schedule --name "job" --cron "* * * * *" --task "path"`
+- **Start Scheduler**: `./reproq beat`
+- **Set Rate Limit**: `./reproq limit set --key "global" --rate 10`
+- **Cancel Task**: `./reproq cancel --id 123`
 - **Verification**: `./reproq verify --dsn "postgres://..."`
 - **Torture Test**: `./reproq torture --dsn "postgres://..."`
+- **Load Testing**: `./reproq loadgen --tasks 10000`
 
 ### Development & Testing
 Automated via `Makefile`:

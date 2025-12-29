@@ -8,38 +8,34 @@ import (
 type TaskStatus string
 
 const (
-	StatusPending    TaskStatus = "PENDING"
+	StatusReady      TaskStatus = "READY"
 	StatusRunning    TaskStatus = "RUNNING"
 	StatusSuccessful TaskStatus = "SUCCESSFUL"
 	StatusFailed     TaskStatus = "FAILED"
-	StatusRetrying   TaskStatus = "RETRYING"
-	StatusCancelled  TaskStatus = "CANCELLED"
-	StatusWaiting    TaskStatus = "WAITING"
 )
 
 type TaskRun struct {
-	ID           int64           `db:"id"`
-	ParentID     *int64          `db:"parent_id"`
-	SpecHash     string          `db:"spec_hash"`
-	QueueName    string          `db:"queue_name"`
-	Status       TaskStatus      `db:"status"`
-	Priority     int             `db:"priority"`
-	RunAfter     time.Time       `db:"run_after"`
-	LeasedUntil  *time.Time      `db:"leased_until"`
-	WorkerID     *string         `db:"worker_id"`
-	PayloadJSON  json.RawMessage `db:"payload_json"`
-	ResultJSON   json.RawMessage `db:"result_json"`
-	ErrorJSON    json.RawMessage `db:"error_json"`
-	Stdout       *string         `db:"stdout"`
-	Stderr       *string         `db:"stderr"`
-	ExitCode     *int            `db:"exit_code"`
-	AttemptCount int             `db:"attempt_count"`
-	MaxAttempts  int             `db:"max_attempts"`
-	CreatedAt    time.Time       `db:"created_at"`
-	UpdatedAt    time.Time       `db:"updated_at"`
-	StartedAt    *time.Time      `db:"started_at"`
-	CompletedAt  *time.Time      `db:"completed_at"`
-	FailedAt     *time.Time      `db:"failed_at"`
-	LastError    *string         `db:"last_error"`
-	CancelRequested bool         `db:"cancel_requested"`
+	ResultID          int64           `db:"result_id"`
+	BackendAlias      string          `db:"backend_alias"`
+	QueueName         string          `db:"queue_name"`
+	Priority          int             `db:"priority"`
+	RunAfter          *time.Time      `db:"run_after"`
+	SpecJSON          json.RawMessage `db:"spec_json"`
+	SpecHash          string          `db:"spec_hash"`
+	Status            TaskStatus      `db:"status"`
+	EnqueuedAt        time.Time       `db:"enqueued_at"`
+	StartedAt         *time.Time      `db:"started_at"`
+	LastAttemptedAt   *time.Time      `db:"last_attempted_at"`
+	FinishedAt        *time.Time      `db:"finished_at"`
+	Attempts          int             `db:"attempts"`
+	WorkerIDs         []string        `db:"worker_ids"`
+	ReturnJSON        json.RawMessage `db:"return_json"`
+	ErrorsJSON        json.RawMessage `db:"errors_json"`
+	LeasedUntil       *time.Time      `db:"leased_until"`
+	LeasedBy          *string         `db:"leased_by"`
+	LogsURI           *string         `db:"logs_uri"`
+	ArtifactsURI      *string         `db:"artifacts_uri"`
+	CreatedAt         time.Time       `db:"created_at"`
+	UpdatedAt         time.Time       `db:"updated_at"`
+	CancelRequested   bool            `db:"cancel_requested"`
 }
