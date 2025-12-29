@@ -110,7 +110,8 @@ func (s *Service) Heartbeat(ctx context.Context, taskID int64, duration time.Dur
 }
 
 // CompleteSuccess marks a task as SUCCESSFUL and stores the result.
-func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON json.RawMessage, stdout, stderr string, exitCode int) error {
+// It uses fencing to ensure only the current lease holder can commit the result.
+func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, workerID string, resultJSON json.RawMessage, stdout, stderr string, exitCode int) error {
 	query := `
 		UPDATE task_runs
 		SET status = 'SUCCESSFUL',
@@ -120,14 +121,20 @@ func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON 
 		    exit_code = $4,
 		    completed_at = NOW(),
 		    updated_at = NOW()
-		WHERE id = $5
+		WHERE id = $5 
+		  AND worker_id = $6 
+		  AND status = 'RUNNING'
 	`
-	_, err := s.pool.Exec(ctx, query, resultJSON, stdout, stderr, exitCode, taskID)
+	res, err := s.pool.Exec(ctx, query, resultJSON, stdout, stderr, exitCode, taskID, workerID)
+	if err == nil && res.RowsAffected() == 0 {
+		return fmt.Errorf("fencing failure: task %d is no longer owned by worker %s or is not in RUNNING state", taskID, workerID)
+	}
 	return err
 }
 
 // CompleteFailure marks a task as FAILED or schedules a retry.
-func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON json.RawMessage, stdout, stderr string, exitCode int, shouldRetry bool, nextRunAfter time.Time) error {
+// It uses fencing to ensure only the current lease holder can commit the failure.
+func (s *Service) CompleteFailure(ctx context.Context, taskID int64, workerID string, errorJSON json.RawMessage, stdout, stderr string, exitCode int, shouldRetry bool, nextRunAfter time.Time) error {
 	var status TaskStatus
 	var runAfter time.Time
 	
@@ -149,9 +156,14 @@ func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON j
 		    run_after = $6,
 		    completed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    updated_at = NOW()
-		WHERE id = $7
+		WHERE id = $7 
+		  AND worker_id = $8 
+		  AND status = 'RUNNING'
 	`
-	_, err := s.pool.Exec(ctx, query, status, errorJSON, stdout, stderr, exitCode, runAfter, taskID)
+	res, err := s.pool.Exec(ctx, query, status, errorJSON, stdout, stderr, exitCode, runAfter, taskID, workerID)
+	if err == nil && res.RowsAffected() == 0 {
+		return fmt.Errorf("fencing failure: task %d is no longer owned by worker %s or is not in RUNNING state", taskID, workerID)
+	}
 	return err
 }
 

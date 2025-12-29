@@ -8,13 +8,15 @@ import (
 )
 
 type Config struct {
-	DatabaseURL   string
-	WorkerID      string
-	PollInterval  time.Duration
-	QueueName     string
-	PythonCommand []string
-	ExecMode      string        // "shell" or "mock"
-	ExecSleep     time.Duration // Sleep duration for mock executor
+	DatabaseURL     string
+	WorkerID        string
+	PollInterval    time.Duration
+	QueueName       string
+	PythonCommand   []string
+	ExecMode        string        // "shell" or "mock"
+	ExecSleep       time.Duration // Sleep duration for mock executor
+	LeaseDuration   time.Duration // How long a worker claims a task for
+	ShutdownTimeout time.Duration // How long to wait for tasks to finish on shutdown
 }
 
 func (c *Config) BindFlags(fs *flag.FlagSet) {
@@ -24,6 +26,8 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.QueueName, "queue", c.QueueName, "Queue name to process")
 	fs.StringVar(&c.ExecMode, "exec-mode", c.ExecMode, "Execution mode (shell|mock)")
 	fs.DurationVar(&c.ExecSleep, "exec-sleep", c.ExecSleep, "Sleep duration for mock mode")
+	fs.DurationVar(&c.LeaseDuration, "lease-duration", c.LeaseDuration, "Initial task lease duration")
+	fs.DurationVar(&c.ShutdownTimeout, "shutdown-timeout", c.ShutdownTimeout, "Time to wait for tasks on shutdown")
 }
 
 func Load() (*Config, error) {
@@ -69,13 +73,18 @@ func Load() (*Config, error) {
 		}
 	}
 	
+	leaseDuration := 5 * time.Minute
+	shutdownTimeout := 30 * time.Second
+
 	return &Config{
-		DatabaseURL:   dbURL,
-		WorkerID:      workerID,
-		PollInterval:  pollInterval,
-		QueueName:     queueName,
-		PythonCommand: baseCmd,
-		ExecMode:      execMode,
-		ExecSleep:     execSleep,
+		DatabaseURL:     dbURL,
+		WorkerID:        workerID,
+		PollInterval:    pollInterval,
+		QueueName:       queueName,
+		PythonCommand:   baseCmd,
+		ExecMode:        execMode,
+		ExecSleep:       execSleep,
+		LeaseDuration:   leaseDuration,
+		ShutdownTimeout: shutdownTimeout,
 	}, nil
 }
