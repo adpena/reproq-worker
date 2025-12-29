@@ -42,7 +42,14 @@ The `.github/workflows/release.yml` should be implemented to:
 2.  Run the build script.
 3.  Create a GitHub Release and upload all files from `dist/` as assets.
 
-## 4. Production Supervision
+## 4. Database Migrations
+If you manage the schema directly from this repo, apply the SQL migrations in order.
+
+For legacy installs that used array columns for worker metadata, run:
+`migrations/000013_convert_worker_arrays_to_jsonb.up.sql` to convert
+`task_runs.worker_ids` and `reproq_workers.queues` to JSONB.
+
+## 5. Production Supervision
 The preferred method for managing Reproq in production is using **systemd**.
 
 ### Automated Setup (Recommended)

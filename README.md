@@ -42,6 +42,17 @@ go build -o reproq ./cmd/reproq
 
 ---
 
+## 🗃 Database Schema Notes
+
+Reproq Worker expects these JSONB-backed columns:
+- `task_runs.worker_ids`: JSON array of worker IDs.
+- `reproq_workers.queues`: JSON array of queue names.
+
+If you previously ran the legacy SQL migrations that created array columns, apply
+`migrations/000013_convert_worker_arrays_to_jsonb.up.sql` to convert them.
+
+---
+
 ## 🛠 Usage
 
 ### Start a Worker
@@ -116,4 +127,3 @@ Please open an issue to discuss major changes before submitting a PR. We value y
 
 ## 📜 License
 MIT
-

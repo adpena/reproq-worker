@@ -55,6 +55,7 @@ The central queue table.
 *   `status`: Enum (`READY`, `RUNNING`, `SUCCESSFUL`, `FAILED`).
 *   `run_after`: Scheduling timestamp.
 *   `leased_until`/`leased_by`: Concurrency control and heartbeat tracking.
+*   `worker_ids`: JSON array of worker IDs that have claimed the task.
 
 ### `periodic_tasks`
 Stores cron-based task definitions.
@@ -63,6 +64,7 @@ Stores cron-based task definitions.
 
 ### `reproq_workers`
 Registry of active worker nodes. Used for monitoring and telemetry in the Django Admin.
+*   `queues`: JSON array of queue names handled by the worker.
 
 ## 4. Reliability Invariants
 
