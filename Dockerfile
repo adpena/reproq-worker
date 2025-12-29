@@ -5,15 +5,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o worker ./cmd/worker
-RUN go build -o loadgen ./cmd/loadgen
-RUN go build -o verify ./cmd/verify
+RUN go build -o reproq ./cmd/reproq
 
 FROM alpine:latest
 WORKDIR /app
-COPY --from=builder /app/worker .
-COPY --from=builder /app/loadgen .
-COPY --from=builder /app/verify .
+COPY --from=builder /app/reproq .
 COPY --from=builder /app/migrations ./migrations
 
-CMD ["./worker"]
+CMD ["./reproq", "worker"]

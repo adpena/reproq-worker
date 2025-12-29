@@ -1,6 +1,7 @@
 package config
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -14,6 +15,15 @@ type Config struct {
 	PythonCommand []string
 	ExecMode      string        // "shell" or "mock"
 	ExecSleep     time.Duration // Sleep duration for mock executor
+}
+
+func (c *Config) BindFlags(fs *flag.FlagSet) {
+	fs.StringVar(&c.DatabaseURL, "dsn", c.DatabaseURL, "Database connection string")
+	fs.StringVar(&c.WorkerID, "worker-id", c.WorkerID, "Unique worker ID")
+	fs.DurationVar(&c.PollInterval, "poll-interval", c.PollInterval, "Interval to poll for tasks")
+	fs.StringVar(&c.QueueName, "queue", c.QueueName, "Queue name to process")
+	fs.StringVar(&c.ExecMode, "exec-mode", c.ExecMode, "Execution mode (shell|mock)")
+	fs.DurationVar(&c.ExecSleep, "exec-sleep", c.ExecSleep, "Sleep duration for mock mode")
 }
 
 func Load() (*Config, error) {

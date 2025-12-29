@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"reproq-worker/internal/models"
 )
 
 var ErrNoTasks = errors.New("no tasks available")
@@ -24,7 +23,7 @@ func NewService(pool *pgxpool.Pool) *Service {
 
 // Claim polls for a pending task and atomically transitions it to RUNNING.
 // It uses a single CTE to claim the task in one network round-trip.
-func (s *Service) Claim(ctx context.Context, queueName string, workerID string, leaseDuration time.Duration) (*models.TaskRun, error) {
+func (s *Service) Claim(ctx context.Context, queueName string, workerID string, leaseDuration time.Duration) (*TaskRun, error) {
 	now := time.Now()
 	leasedUntil := now.Add(leaseDuration)
 
@@ -55,7 +54,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 			attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
 	`
 
-	var task models.TaskRun
+	var task TaskRun
 	err := s.pool.QueryRow(ctx, query, queueName, workerID, now, leasedUntil).Scan(
 		&task.ID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
@@ -129,14 +128,14 @@ func (s *Service) CompleteSuccess(ctx context.Context, taskID int64, resultJSON 
 
 // CompleteFailure marks a task as FAILED or schedules a retry.
 func (s *Service) CompleteFailure(ctx context.Context, taskID int64, errorJSON json.RawMessage, stdout, stderr string, exitCode int, shouldRetry bool, nextRunAfter time.Time) error {
-	var status models.TaskStatus
+	var status TaskStatus
 	var runAfter time.Time
 	
 	if shouldRetry {
-		status = models.StatusPending
+		status = StatusPending
 		runAfter = nextRunAfter
 	} else {
-		status = models.StatusFailed
+		status = StatusFailed
 		runAfter = time.Now()
 	}
 

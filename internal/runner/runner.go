@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"reproq-worker/internal/config"
 	"reproq-worker/internal/executor"
-	"reproq-worker/internal/models"
 	"reproq-worker/internal/queue"
 	"sync"
 	"time"
@@ -113,7 +112,7 @@ func (r *Runner) processNext(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (r *Runner) executeTask(ctx context.Context, task *models.TaskRun, leaseDuration time.Duration) {
+func (r *Runner) executeTask(ctx context.Context, task *queue.TaskRun, leaseDuration time.Duration) {
 	logger := r.logger.With("task_id", task.ID, "spec_hash", task.SpecHash)
 	logger.Info("Processing task", "attempt", task.AttemptCount)
 
@@ -175,7 +174,7 @@ func (r *Runner) runHeartbeat(ctx context.Context, taskID int64, duration time.D
 	}
 }
 
-func (r *Runner) handleFailure(ctx context.Context, task *models.TaskRun, errorJSON []byte, stdout, stderr string, exitCode int, shouldRetry bool) error {
+func (r *Runner) handleFailure(ctx context.Context, task *queue.TaskRun, errorJSON []byte, stdout, stderr string, exitCode int, shouldRetry bool) error {
 	// Simple exponential backoff: 2^attempts * 1 second
 	backoff := time.Duration(math.Pow(2, float64(task.AttemptCount))) * time.Second
 	nextRun := time.Now().Add(backoff)
