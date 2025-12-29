@@ -21,7 +21,7 @@ import (
 	"reproq-worker/internal/runner"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -117,8 +117,7 @@ func runBeat(args []string) {
 	defer pool.Close()
 
 	q := queue.NewService(pool)
-	fmt.Printf("Starting reproq beat (interval: %v)...
-", *interval)
+	fmt.Printf("Starting reproq beat (interval: %v)...\n", *interval)
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
