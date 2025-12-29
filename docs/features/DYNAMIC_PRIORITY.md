@@ -8,8 +8,8 @@ High-priority tasks can "starve" low-priority ones if the high-priority queue is
 - Calculate an "Effective Priority" = `priority + (age_in_seconds / constant)`.
 
 ## Implementation Checklist
-- [ ] Logic: Update the `ORDER BY` clause in `internal/queue/Service.Claim`.
-- [ ] Config: Add `PRIORITY_AGING_FACTOR` to `config.go`.
+- [x] Logic: Update the `ORDER BY` clause in `internal/queue/Service.Claim`.
+- [x] Config: Add `PRIORITY_AGING_FACTOR` to `config.go`.
 
 ## References
 - CPU Scheduling algorithms (Aging).

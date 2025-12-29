@@ -23,7 +23,8 @@ func NewService(pool *pgxpool.Pool) *Service {
 
 // Claim polls for a pending task and atomically transitions it to RUNNING.
 // It uses a single CTE to claim the task and update rate limits in one network round-trip.
-func (s *Service) Claim(ctx context.Context, queueName string, workerID string, leaseDuration time.Duration) (*TaskRun, error) {
+// It also implements priority aging to prevent starvation of low-priority tasks.
+func (s *Service) Claim(ctx context.Context, queueName string, workerID string, leaseDuration time.Duration, agingFactor float64) (*TaskRun, error) {
 	now := time.Now()
 	leasedUntil := now.Add(leaseDuration)
 
@@ -59,7 +60,10 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 			  AND t.status = 'PENDING'
 			  AND t.run_after <= NOW()
 			  AND cp.count >= (SELECT count(*) FROM rate_limits WHERE key IN ('global', $1))
-			ORDER BY t.priority DESC, t.created_at ASC
+			ORDER BY 
+				-- Priority Aging: Effective Priority = priority + (age / aging_factor)
+				(t.priority + CASE WHEN $6 > 0 THEN (EXTRACT(EPOCH FROM (NOW() - t.created_at)) / $6) ELSE 0 END) DESC,
+				t.created_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -81,7 +85,7 @@ func (s *Service) Claim(ctx context.Context, queueName string, workerID string, 
 	`
 
 	var task TaskRun
-	err := s.pool.QueryRow(ctx, query, queueLimitKey, queueName, workerID, now, leasedUntil).Scan(
+	err := s.pool.QueryRow(ctx, query, queueLimitKey, queueName, workerID, now, leasedUntil, agingFactor).Scan(
 		&task.ID, &task.ParentID, &task.SpecHash, &task.QueueName, &task.Status, &task.Priority, &task.RunAfter,
 		&task.LeasedUntil, &task.WorkerID, &task.PayloadJSON, &task.ResultJSON, &task.ErrorJSON,
 		&task.Stdout, &task.Stderr, &task.ExitCode,

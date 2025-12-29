@@ -41,7 +41,7 @@ func TestQueueIntegration(t *testing.T) {
 
 	// 2. Claim Task
 	workerID := "test-worker-1"
-	task, err := s.Claim(ctx, "default", workerID, 5*time.Second)
+	task, err := s.Claim(ctx, "default", workerID, 5*time.Second, 0)
 	if err != nil {
 		t.Fatalf("failed to claim: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRetryLifecycle(t *testing.T) {
 	`)
 
 	// Claim and Fail (Attempt 1)
-	task, _ := s.Claim(ctx, "default", "w1", 1*time.Minute)
+	task, _ := s.Claim(ctx, "default", "w1", 1*time.Minute, 0)
 	err = s.CompleteFailure(ctx, task.ID, "w1", []byte("err"), "out", "err", 1, true, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestRetryLifecycle(t *testing.T) {
 	}
 
 	// Claim and Fail (Attempt 2 - exhausted)
-	task, _ = s.Claim(ctx, "default", "w2", 1*time.Minute)
+	task, _ = s.Claim(ctx, "default", "w2", 1*time.Minute, 0)
 	err = s.CompleteFailure(ctx, task.ID, "w2", []byte("err"), "out", "err", 1, false, time.Now())
 	
 	pool.QueryRow(ctx, "SELECT status FROM task_runs WHERE id = $1", task.ID).Scan(&status)

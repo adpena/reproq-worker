@@ -16,8 +16,9 @@ type Config struct {
 	ExecMode        string        // "shell" or "mock"
 	ExecSleep       time.Duration // Sleep duration for mock executor
 	LeaseDuration   time.Duration // How long a worker claims a task for
-	ShutdownTimeout time.Duration // How long to wait for tasks to finish on shutdown
-	HealthAddr      string        // HTTP address for health/metrics
+	ShutdownTimeout     time.Duration // How long to wait for tasks to finish on shutdown
+	HealthAddr          string        // HTTP address for health/metrics
+	PriorityAgingFactor float64       // How many seconds of waiting equals 1 priority point
 }
 
 func (c *Config) BindFlags(fs *flag.FlagSet) {
@@ -30,6 +31,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.LeaseDuration, "lease-duration", c.LeaseDuration, "Initial task lease duration")
 	fs.DurationVar(&c.ShutdownTimeout, "shutdown-timeout", c.ShutdownTimeout, "Time to wait for tasks on shutdown")
 	fs.StringVar(&c.HealthAddr, "health-addr", c.HealthAddr, "HTTP address for health/metrics")
+	fs.Float64Var(&c.PriorityAgingFactor, "priority-aging-factor", c.PriorityAgingFactor, "Seconds of waiting for 1 priority point (0 to disable)")
 }
 
 func Load() (*Config, error) {
@@ -81,17 +83,19 @@ func Load() (*Config, error) {
 	if addr := os.Getenv("HEALTH_ADDR"); addr != "" {
 		healthAddr = addr
 	}
+	priorityAgingFactor := 60.0 // Default: 1 priority point per minute
 
 	return &Config{
-		DatabaseURL:     dbURL,
-		WorkerID:        workerID,
-		PollInterval:    pollInterval,
-		QueueName:       queueName,
-		PythonCommand:   baseCmd,
-		ExecMode:        execMode,
-		ExecSleep:       execSleep,
-		LeaseDuration:   leaseDuration,
-		ShutdownTimeout: shutdownTimeout,
-		HealthAddr:      healthAddr,
+		DatabaseURL:         dbURL,
+		WorkerID:            workerID,
+		PollInterval:        pollInterval,
+		QueueName:           queueName,
+		PythonCommand:       baseCmd,
+		ExecMode:            execMode,
+		ExecSleep:           execSleep,
+		LeaseDuration:       leaseDuration,
+		ShutdownTimeout:     shutdownTimeout,
+		HealthAddr:          healthAddr,
+		PriorityAgingFactor: priorityAgingFactor,
 	}, nil
 }

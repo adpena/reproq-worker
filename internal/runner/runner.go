@@ -108,7 +108,7 @@ func (r *Runner) runReaper(ctx context.Context) {
 func (r *Runner) processNext(ctx context.Context) (bool, error) {
 	// 1. Claim
 	startClaim := time.Now()
-	task, err := r.queue.Claim(ctx, r.cfg.QueueName, r.cfg.WorkerID, r.cfg.LeaseDuration)
+	task, err := r.queue.Claim(ctx, r.cfg.QueueName, r.cfg.WorkerID, r.cfg.LeaseDuration, r.cfg.PriorityAgingFactor)
 	if err != nil {
 		if errors.Is(err, queue.ErrNoTasks) {
 			return false, nil
