@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -69,7 +68,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	}
 
 	cmd := exec.CommandContext(ctx, e.PythonBin, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 
 	var stdinPipe io.WriteCloser
 	if e.PayloadMode == "stdin" {
@@ -99,11 +98,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	
 	// Process Cleanup
 	if ctx.Err() == context.DeadlineExceeded {
-		// Kill process group
-		pgid, _ := syscall.Getpgid(cmd.Process.Pid)
-		syscall.Kill(-pgid, syscall.SIGTERM)
-		time.Sleep(100 * time.Millisecond) // Graceful SIGTERM
-		syscall.Kill(-pgid, syscall.SIGKILL)
+		terminateProcessGroup(cmd)
 		return nil, stdoutBuf.String(), stderrBuf.String(), context.DeadlineExceeded
 	}
 
