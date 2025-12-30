@@ -285,6 +285,91 @@ func TestRateLimitingClaim(t *testing.T) {
 	}
 }
 
+func TestWorkflowChordRelease(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	pool.Exec(ctx, "DELETE FROM rate_limits")
+	s := NewService(pool)
+
+	workflowID := "11111111-1111-1111-1111-111111111111"
+
+	var id1 int64
+	var id2 int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
+		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		RETURNING result_id
+	`, "wf1"+strings.Repeat("a", 61), workflowID).Scan(&id1)
+	if err != nil {
+		t.Fatalf("failed to insert task 1: %v", err)
+	}
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
+		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		RETURNING result_id
+	`, "wf2"+strings.Repeat("b", 61), workflowID).Scan(&id2)
+	if err != nil {
+		t.Fatalf("failed to insert task 2: %v", err)
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, wait_count)
+		VALUES ($1, 'default', '{}', 'WAITING', NOW(), $2, 2)
+	`, "wf_cb"+strings.Repeat("c", 59), workflowID)
+	if err != nil {
+		t.Fatalf("failed to insert callback task: %v", err)
+	}
+
+	if err := s.CompleteSuccess(ctx, id1, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
+		t.Fatalf("complete success task 1: %v", err)
+	}
+
+	var waitCount int
+	var status string
+	err = pool.QueryRow(ctx, `
+		SELECT wait_count, status FROM task_runs
+		WHERE workflow_id = $1 AND parent_id IS NULL AND status = 'WAITING'
+	`, workflowID).Scan(&waitCount, &status)
+	if err != nil {
+		t.Fatalf("failed to read callback after first completion: %v", err)
+	}
+	if waitCount != 1 {
+		t.Errorf("expected wait_count 1, got %d", waitCount)
+	}
+	if status != "WAITING" {
+		t.Errorf("expected status WAITING, got %s", status)
+	}
+
+	if err := s.CompleteSuccess(ctx, id2, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
+		t.Fatalf("complete success task 2: %v", err)
+	}
+
+	err = pool.QueryRow(ctx, `
+		SELECT wait_count, status FROM task_runs
+		WHERE workflow_id = $1 AND parent_id IS NULL
+	`, workflowID).Scan(&waitCount, &status)
+	if err != nil {
+		t.Fatalf("failed to read callback after second completion: %v", err)
+	}
+	if waitCount != 0 {
+		t.Errorf("expected wait_count 0, got %d", waitCount)
+	}
+	if status != "READY" {
+		t.Errorf("expected status READY, got %s", status)
+	}
+}
+
 func TestPeriodicTasks(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

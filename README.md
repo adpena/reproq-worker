@@ -132,7 +132,7 @@ The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 
 - **Dynamic Priority (Aging)**: Implemented. The worker applies priority aging in the claim query based on `PRIORITY_AGING_FACTOR`.
 - **Rate Limiting**: Implemented. Token bucket limits are enforced during claiming via the `rate_limits` table.
-- **Workflows**: Chains are supported via the Django library. The worker handles dependency resolution (`parent_id`), but group/chord callbacks are not implemented yet.
+- **Workflows**: Chains, groups, and chords are supported via the Django library. The worker handles dependency resolution (`parent_id` and workflow callbacks).
 
 ---
 

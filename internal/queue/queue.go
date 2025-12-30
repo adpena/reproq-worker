@@ -223,19 +223,8 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 	}
 
 	// 2. Trigger dependents
-	// Decrement wait_count for all tasks waiting on this one or in the same workflow
-	// If wait_count reaches 0, set status to READY
+	// Decrement wait_count for direct children (chains).
 	triggerQuery := `
-		UPDATE task_runs
-		SET wait_count = wait_count - 1,
-		    updated_at = NOW()
-		WHERE (parent_id = $1 OR (workflow_id IS NOT NULL AND workflow_id = (SELECT workflow_id FROM task_runs WHERE result_id = $1)))
-		  AND status = 'WAITING'
-		RETURNING result_id, wait_count
-	`
-	// Note: The logic above is a bit simplified. Usually, you'd want a more precise link.
-	// Let's stick to parent_id for now for reliability.
-	triggerQuery = `
 		UPDATE task_runs
 		SET wait_count = wait_count - 1,
 		    status = CASE
@@ -248,6 +237,25 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 	_, err = tx.Exec(ctx, triggerQuery, resultID)
 	if err != nil {
 		return fmt.Errorf("failed to trigger dependents: %w", err)
+	}
+
+	// Decrement wait_count for workflow callbacks (chords).
+	workflowTrigger := `
+		UPDATE task_runs
+		SET wait_count = wait_count - 1,
+		    status = CASE
+				WHEN wait_count - 1 <= 0 THEN 'READY'
+				ELSE 'WAITING'
+			END,
+		    updated_at = NOW()
+		WHERE workflow_id = (SELECT workflow_id FROM task_runs WHERE result_id = $1)
+		  AND parent_id IS NULL
+		  AND status = 'WAITING'
+		  AND wait_count > 0
+	`
+	_, err = tx.Exec(ctx, workflowTrigger, resultID)
+	if err != nil {
+		return fmt.Errorf("failed to trigger workflow callbacks: %w", err)
 	}
 
 	return tx.Commit(ctx)
