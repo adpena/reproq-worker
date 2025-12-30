@@ -4,8 +4,10 @@ go 1.24.0
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robfig/cron/v3 v3.0.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

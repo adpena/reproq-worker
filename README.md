@@ -69,10 +69,11 @@ Starts the periodic task scheduler. **Run only one instance per database.**
 ```
 
 ### `replay`
-Manually re-enqueues a specific task result ID.
+Manually re-enqueues a task by result ID or spec hash (latest match).
 
 ```bash
 ./reproq replay --dsn "..." --id 12345
+./reproq replay --dsn "..." --spec-hash <hash>
 ```
 
 ### `cancel`
@@ -81,6 +82,7 @@ Request cancellation of a running task.
 ```bash
 ./reproq cancel --dsn "..." --id 12345
 ```
+Cancellation is enforced on the next worker heartbeat; cancelled runs are recorded as `FAILED` with a `kind=cancelled` error payload.
 
 ### `triage`
 List, inspect, and retry failed tasks.
@@ -97,6 +99,14 @@ List, inspect, and retry failed tasks.
 
 # Retry all failed tasks
 ./reproq triage retry --dsn "..." --all
+```
+
+### `prune`
+Delete expired tasks (where `expires_at` is in the past and status is not `RUNNING`).
+
+```bash
+./reproq prune expired --dsn "..." --dry-run
+./reproq prune expired --dsn "..." --limit 1000
 ```
 
 ### `limit`
@@ -118,19 +128,27 @@ Defaults: global rate limiting is disabled until you set a positive rate.
 
 ## ⚙️ Configuration
 
-The worker is configured via CLI flags. Environment variables are also supported for some options.
+The worker and beat commands can read configuration from CLI flags, environment variables, and a YAML/TOML config file.
+Config precedence is: defaults < config file < environment variables < CLI flags.
+Config files are discovered in this order: `--config`, `REPROQ_CONFIG`, then `reproq.yaml`, `reproq.yml`, `reproq.toml`, `.reproq.yaml`, `.reproq.yml`, `.reproq.toml` in the working directory.
+See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 
 ### General Flags
 | Flag | Env Var | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `--config` | `REPROQ_CONFIG` | - | Path to a YAML/TOML config file. |
 | `--dsn` | `DATABASE_URL` | - | **Required**. PostgreSQL connection string. |
 | `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique identifier for this worker node. Used for heartbeats. |
 | `--queues` | `QUEUE_NAMES` | `default` | Comma-separated list of queue names to poll. |
-| `--allowed-task-modules` | `ALLOWED_TASK_MODULES` | `myapp.tasks.,tasks.` | Comma-separated allow-list of task module prefixes. |
+| `--allowed-task-modules` | `ALLOWED_TASK_MODULES` | `myapp.tasks.,tasks.` | Comma-separated allow-list of task module prefixes (`*` disables validation; dev only). |
+| `--logs-dir` | `REPROQ_LOGS_DIR` | - | Directory to persist stdout/stderr logs (updates `logs_uri`). |
 | `--metrics-port` | - | `0` (Disabled) | Port to serve Prometheus metrics and health (e.g., `9090`). |
 | `--metrics-addr` | `METRICS_ADDR` | - | Full address for health/metrics (overrides `--metrics-port`). |
 | `--metrics-auth-token` | `METRICS_AUTH_TOKEN` | - | Require `Authorization: Bearer <token>` for health/metrics. |
 | `--metrics-allow-cidrs` | `METRICS_ALLOW_CIDRS` | - | Comma-separated IP/CIDR allow-list for health/metrics. |
+| `--metrics-tls-cert` | `METRICS_TLS_CERT` | - | TLS certificate path for health/metrics. |
+| `--metrics-tls-key` | `METRICS_TLS_KEY` | - | TLS private key path for health/metrics. |
+| `--metrics-tls-client-ca` | `METRICS_TLS_CLIENT_CA` | - | Optional client CA bundle to require mTLS for health/metrics. |
 | `--metrics-auth-limit` | `METRICS_AUTH_LIMIT` | `30` | Max unauthorized requests per window. |
 | `--metrics-auth-window` | `METRICS_AUTH_WINDOW` | `1m` | Rate limit window for unauthorized requests. |
 | `--metrics-auth-max-entries` | `METRICS_AUTH_MAX_ENTRIES` | `1000` | Max tracked remote hosts for auth rate limiting. |
@@ -138,10 +156,14 @@ The worker is configured via CLI flags. Environment variables are also supported
 When `--metrics-port` or `--metrics-addr` is set, the worker serves `GET /metrics` and `GET /healthz`.
 Use `--metrics-addr 127.0.0.1:9090` to bind locally, or set `METRICS_AUTH_TOKEN` to require auth.
 Set `METRICS_ALLOW_CIDRS` to restrict access by IP or CIDR (for example `127.0.0.1/32,10.0.0.0/8`).
+Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
+Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
+When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.
 Structured logs redact payload and secret-like fields by key name.
 `--payload-mode inline` exposes payload data in process args; prefer `stdin` or `file` for sensitive payloads. Production builds (`-tags prod`) reject `inline`.
+Config files can also set fields that do not have CLI flags, including poll backoff, executor module, payload limits, and timeouts.
 
 ### Worker Tuning
 | Flag | Default | Description |
@@ -202,6 +224,11 @@ Rule of thumb:
 ---
 
 ## 🧪 Development & Testing
+
+### Quick Local Bootstrap
+```bash
+bash scripts/dev_bootstrap.sh
+```
 
 ### Run Unit Tests
 ```bash

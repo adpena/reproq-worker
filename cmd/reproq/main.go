@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -23,7 +24,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.124"
+const Version = "0.0.128"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -49,6 +50,8 @@ func main() {
 		runCancel(os.Args[2:])
 	case "triage":
 		runTriage(os.Args[2:])
+	case "prune":
+		runPrune(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -56,51 +59,161 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: reproq <worker|beat|replay|limit|cancel|triage|version> [args]")
+	fmt.Println("usage: reproq <worker|beat|replay|limit|cancel|triage|prune|version> [args]")
 }
 
-func runWorker(args []string) {
-	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	metricsPort := fs.Int("metrics-port", 0, "Port to serve Prometheus metrics (0 to disable)")
-	metricsAddr := fs.String("metrics-addr", os.Getenv("METRICS_ADDR"), "Address to serve health/metrics (overrides --metrics-port)")
-	metricsToken := fs.String("metrics-auth-token", os.Getenv("METRICS_AUTH_TOKEN"), "Bearer token required for /metrics and /healthz")
-	metricsAllowCIDRs := fs.String("metrics-allow-cidrs", os.Getenv("METRICS_ALLOW_CIDRS"), "Comma-separated IP/CIDR allow-list for /metrics and /healthz")
-	authLimit := web.DefaultAuthLimit
+type metricsConfig struct {
+	addr           string
+	port           int
+	authToken      string
+	allowCIDRs     string
+	authLimit      int
+	authWindow     time.Duration
+	authMaxEntries int
+	tlsCert        string
+	tlsKey         string
+	tlsClientCA    string
+}
+
+func defaultMetricsConfig() metricsConfig {
+	return metricsConfig{
+		authLimit:      web.DefaultAuthLimit,
+		authWindow:     web.DefaultAuthWindow,
+		authMaxEntries: web.DefaultAuthMaxEntries,
+	}
+}
+
+func applyMetricsFileConfig(cfg *metricsConfig, fileCfg *config.FileConfig) error {
+	if fileCfg == nil {
+		return nil
+	}
+	metrics := fileCfg.Metrics
+	if metrics.Addr != "" {
+		cfg.addr = metrics.Addr
+	}
+	if metrics.Port != nil {
+		cfg.port = *metrics.Port
+	}
+	if metrics.AuthToken != "" {
+		cfg.authToken = metrics.AuthToken
+	}
+	if len(metrics.AllowCIDRs) > 0 {
+		cfg.allowCIDRs = strings.Join(metrics.AllowCIDRs, ",")
+	}
+	if metrics.AuthLimit != nil {
+		cfg.authLimit = *metrics.AuthLimit
+	}
+	if metrics.AuthWindow != "" {
+		parsed, err := time.ParseDuration(metrics.AuthWindow)
+		if err != nil || parsed <= 0 {
+			if err == nil {
+				err = fmt.Errorf("must be a positive duration")
+			}
+			return fmt.Errorf("invalid metrics.auth_window: %w", err)
+		}
+		cfg.authWindow = parsed
+	}
+	if metrics.AuthMaxEntries != nil {
+		cfg.authMaxEntries = *metrics.AuthMaxEntries
+	}
+	if metrics.TLSCert != "" {
+		cfg.tlsCert = metrics.TLSCert
+	}
+	if metrics.TLSKey != "" {
+		cfg.tlsKey = metrics.TLSKey
+	}
+	if metrics.TLSClientCA != "" {
+		cfg.tlsClientCA = metrics.TLSClientCA
+	}
+	return nil
+}
+
+func applyMetricsEnv(cfg *metricsConfig) error {
+	if val := os.Getenv("METRICS_ADDR"); val != "" {
+		cfg.addr = val
+	}
+	if val := os.Getenv("METRICS_AUTH_TOKEN"); val != "" {
+		cfg.authToken = val
+	}
+	if val := os.Getenv("METRICS_ALLOW_CIDRS"); val != "" {
+		cfg.allowCIDRs = val
+	}
 	if val := os.Getenv("METRICS_AUTH_LIMIT"); val != "" {
 		parsed, err := strconv.Atoi(val)
 		if err != nil || parsed <= 0 {
-			log.Fatal("Invalid METRICS_AUTH_LIMIT (must be a positive integer)")
+			return fmt.Errorf("invalid METRICS_AUTH_LIMIT (must be a positive integer)")
 		}
-		authLimit = parsed
+		cfg.authLimit = parsed
 	}
-	authWindow := web.DefaultAuthWindow
 	if val := os.Getenv("METRICS_AUTH_WINDOW"); val != "" {
 		parsed, err := time.ParseDuration(val)
 		if err != nil || parsed <= 0 {
-			log.Fatal("Invalid METRICS_AUTH_WINDOW (must be a positive duration, e.g. 1m)")
+			return fmt.Errorf("invalid METRICS_AUTH_WINDOW (must be a positive duration, e.g. 1m)")
 		}
-		authWindow = parsed
+		cfg.authWindow = parsed
 	}
-	authMaxEntries := web.DefaultAuthMaxEntries
 	if val := os.Getenv("METRICS_AUTH_MAX_ENTRIES"); val != "" {
 		parsed, err := strconv.Atoi(val)
 		if err != nil || parsed <= 0 {
-			log.Fatal("Invalid METRICS_AUTH_MAX_ENTRIES (must be a positive integer)")
+			return fmt.Errorf("invalid METRICS_AUTH_MAX_ENTRIES (must be a positive integer)")
 		}
-		authMaxEntries = parsed
+		cfg.authMaxEntries = parsed
 	}
-	metricsAuthLimit := fs.Int("metrics-auth-limit", authLimit, "Unauthorized request limit per window")
-	metricsAuthWindow := fs.Duration("metrics-auth-window", authWindow, "Window for unauthorized request rate limiting")
-	metricsAuthMaxEntries := fs.Int("metrics-auth-max-entries", authMaxEntries, "Max tracked hosts for auth rate limiting")
-	cfg, err := config.Load()
+	if val := os.Getenv("METRICS_TLS_CERT"); val != "" {
+		cfg.tlsCert = val
+	}
+	if val := os.Getenv("METRICS_TLS_KEY"); val != "" {
+		cfg.tlsKey = val
+	}
+	if val := os.Getenv("METRICS_TLS_CLIENT_CA"); val != "" {
+		cfg.tlsClientCA = val
+	}
+	return nil
+}
+
+func runWorker(args []string) {
+	configPath, err := config.ResolveConfigPath(args)
 	if err != nil {
 		log.Fatal(err)
 	}
+	fileCfg, err := config.LoadFileConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	if err := config.ApplyFileConfig(cfg, fileCfg); err != nil {
+		log.Fatal(err)
+	}
+	if err := config.ApplyEnv(cfg); err != nil {
+		log.Fatal(err)
+	}
+
+	metricsCfg := defaultMetricsConfig()
+	if err := applyMetricsFileConfig(&metricsCfg, fileCfg); err != nil {
+		log.Fatal(err)
+	}
+	if err := applyMetricsEnv(&metricsCfg); err != nil {
+		log.Fatal(err)
+	}
+
+	fs := flag.NewFlagSet("worker", flag.ExitOnError)
+	fs.String("config", configPath, "Path to reproq config file")
+	metricsPort := fs.Int("metrics-port", metricsCfg.port, "Port to serve Prometheus metrics (0 to disable)")
+	metricsAddr := fs.String("metrics-addr", metricsCfg.addr, "Address to serve health/metrics (overrides --metrics-port)")
+	metricsToken := fs.String("metrics-auth-token", metricsCfg.authToken, "Bearer token required for /metrics and /healthz")
+	metricsAllowCIDRs := fs.String("metrics-allow-cidrs", metricsCfg.allowCIDRs, "Comma-separated IP/CIDR allow-list for /metrics and /healthz")
+	metricsAuthLimit := fs.Int("metrics-auth-limit", metricsCfg.authLimit, "Unauthorized request limit per window")
+	metricsAuthWindow := fs.Duration("metrics-auth-window", metricsCfg.authWindow, "Window for unauthorized request rate limiting")
+	metricsAuthMaxEntries := fs.Int("metrics-auth-max-entries", metricsCfg.authMaxEntries, "Max tracked hosts for auth rate limiting")
+	metricsTLSCert := fs.String("metrics-tls-cert", metricsCfg.tlsCert, "TLS certificate path for health/metrics")
+	metricsTLSKey := fs.String("metrics-tls-key", metricsCfg.tlsKey, "TLS private key path for health/metrics")
+	metricsTLSClientCA := fs.String("metrics-tls-client-ca", metricsCfg.tlsClientCA, "Optional client CA bundle for mTLS on health/metrics")
 	cfg.BindFlags(fs)
 	fs.Parse(args)
 
 	if cfg.DatabaseURL == "" {
-		log.Fatal("DSN required (use --dsn or DATABASE_URL)")
+		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
 	}
 
 	cfg.Version = Version
@@ -142,10 +255,15 @@ func runWorker(args []string) {
 		if *metricsAuthMaxEntries <= 0 {
 			log.Fatal("--metrics-auth-max-entries must be a positive integer")
 		}
-		if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil {
+		tlsConfig, err := web.BuildTLSConfig(*metricsTLSCert, *metricsTLSKey, *metricsTLSClientCA)
+		if err != nil {
+			log.Fatal(err)
+		}
+		clientAuth := tlsConfig != nil && tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert
+		if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
 			logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN", "addr", addr)
 		}
-		server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist)
+		server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig)
 		go func() {
 			logger.Info("Serving health and metrics", "addr", addr)
 			if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
@@ -186,13 +304,47 @@ func isLoopbackAddr(addr string) bool {
 }
 
 func runBeat(args []string) {
+	configPath, err := config.ResolveConfigPath(args)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fileCfg, err := config.LoadFileConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	beatDSN := ""
+	beatInterval := 30 * time.Second
+	if fileCfg != nil {
+		if fileCfg.DSN != "" {
+			beatDSN = fileCfg.DSN
+		}
+		if fileCfg.Beat.DSN != "" {
+			beatDSN = fileCfg.Beat.DSN
+		}
+		if fileCfg.Beat.Interval != "" {
+			parsed, err := time.ParseDuration(fileCfg.Beat.Interval)
+			if err != nil || parsed <= 0 {
+				if err == nil {
+					err = fmt.Errorf("must be a positive duration")
+				}
+				log.Fatalf("invalid beat.interval: %v", err)
+			}
+			beatInterval = parsed
+		}
+	}
+	if val := os.Getenv("DATABASE_URL"); val != "" {
+		beatDSN = val
+	}
+
 	fs := flag.NewFlagSet("beat", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
-	interval := fs.Duration("interval", 30*time.Second, "Polling interval for periodic tasks")
+	fs.String("config", configPath, "Path to reproq config file")
+	dsn := fs.String("dsn", beatDSN, "Postgres DSN")
+	interval := fs.Duration("interval", beatInterval, "Polling interval for periodic tasks")
 	fs.Parse(args)
 
 	if *dsn == "" {
-		log.Fatal("DSN required (use --dsn or DATABASE_URL)")
+		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -236,10 +388,14 @@ func runReplay(args []string) {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	id := fs.Int64("id", 0, "Result ID to replay")
+	specHash := fs.String("spec-hash", "", "Spec hash to replay (uses latest match)")
 	fs.Parse(args)
 
-	if *dsn == "" || *id == 0 {
-		log.Fatal("DSN and --id required")
+	if *dsn == "" {
+		log.Fatal("DSN required")
+	}
+	if (*id == 0 && *specHash == "") || (*id != 0 && *specHash != "") {
+		log.Fatal("Provide exactly one of --id or --spec-hash")
 	}
 
 	ctx := context.Background()
@@ -250,6 +406,15 @@ func runReplay(args []string) {
 	defer pool.Close()
 
 	q := queue.NewService(pool)
+	if *specHash != "" {
+		sourceID, newID, err := q.ReplayBySpecHash(ctx, *specHash)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("Requeued task %d (spec_hash %s) as new result_id %d\n", sourceID, *specHash, newID)
+		return
+	}
+
 	newID, err := q.Replay(ctx, *id)
 	if err != nil {
 		log.Fatal(err)
@@ -342,6 +507,46 @@ func runLimit(args []string) {
 		fmt.Printf("Deleted %d rate limit(s) for %s\n", deleted, *key)
 	default:
 		fmt.Println("usage: reproq limit <set|ls|rm> [args]")
+	}
+}
+
+func runPrune(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: reproq prune <expired> [args]")
+		return
+	}
+
+	switch args[0] {
+	case "expired":
+		fs := flag.NewFlagSet("prune expired", flag.ExitOnError)
+		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		limit := fs.Int("limit", 0, "Max tasks to delete (0 = no limit)")
+		dryRun := fs.Bool("dry-run", false, "Show count without deleting")
+		fs.Parse(args[1:])
+
+		if *dsn == "" {
+			log.Fatal("DSN required")
+		}
+
+		ctx := context.Background()
+		pool, err := db.NewPool(ctx, *dsn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer pool.Close()
+
+		q := queue.NewService(pool)
+		count, err := q.PruneExpired(ctx, *limit, *dryRun)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *dryRun {
+			fmt.Printf("Would prune %d expired task(s)\n", count)
+			return
+		}
+		fmt.Printf("Pruned %d expired task(s)\n", count)
+	default:
+		fmt.Println("usage: reproq prune <expired> [args]")
 	}
 }
 

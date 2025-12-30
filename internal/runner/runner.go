@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reproq-worker/internal/config"
 	"reproq-worker/internal/executor"
 	"reproq-worker/internal/queue"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -41,8 +45,8 @@ type QueueService interface {
 	UpdateWorkerHeartbeat(ctx context.Context, id string) error
 	Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error)
 	Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error)
-	CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error
-	CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time) error
+	CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error
+	CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error
 }
 
 func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *slog.Logger) *Runner {
@@ -169,7 +173,11 @@ func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {
 }
 
 func (r *Runner) sleep(ctx context.Context) {
-	backoff := time.Duration(rand.Int63n(int64(r.cfg.PollMaxBackoff-r.cfg.PollMinBackoff))) + r.cfg.PollMinBackoff
+	backoffRange := r.cfg.PollMaxBackoff - r.cfg.PollMinBackoff
+	backoff := r.cfg.PollMinBackoff
+	if backoffRange > 0 {
+		backoff = time.Duration(rand.Int63n(int64(backoffRange))) + r.cfg.PollMinBackoff
+	}
 	select {
 	case <-time.After(backoff):
 	case <-ctx.Done():
@@ -209,6 +217,8 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	var cancelRequested atomic.Bool
+
 	// Heartbeat
 	if r.cfg.HeartbeatSeconds > 0 {
 		go func() {
@@ -226,7 +236,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 						return
 					}
 					if cancelled {
-						logger.Warn("Remote cancellation requested")
+						if cancelRequested.CompareAndSwap(false, true) {
+							logger.Warn("Remote cancellation requested")
+						}
 						cancel()
 						return
 					}
@@ -236,11 +248,28 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 	}
 
 	execStart := time.Now()
-	env, _, _, err := r.executor.Execute(execCtx, task.ResultID, task.Attempts, task.SpecJSON, r.cfg.ExecTimeout)
+	env, stdout, stderr, err := r.executor.Execute(execCtx, task.ResultID, task.Attempts, task.SpecJSON, r.cfg.ExecTimeout)
 	execDuration.WithLabelValues(task.QueueName).Observe(time.Since(execStart).Seconds())
 
 	completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer compCancel()
+
+	logsURI := r.persistExecutionLogs(task, stdout, stderr)
+
+	if cancelRequested.Load() {
+		logger.Warn("Task cancelled by request")
+		errObj, _ := json.Marshal(map[string]interface{}{
+			"kind":      "cancelled",
+			"message":   "Task cancelled by request",
+			"task_path": specTaskPath,
+			"at":        time.Now(),
+			"worker_id": r.cfg.WorkerID,
+		})
+		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, false, time.Now(), logsURI)
+		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
+		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		return
+	}
 
 	if err != nil {
 		logger.Error("Execution pipeline error", "error", err)
@@ -250,7 +279,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"message": err.Error(),
 			"at":      time.Now(),
 		})
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second))
+		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI)
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		return
 	}
@@ -259,7 +288,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		logger.Info("Task successful")
 		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "success").Inc()
-		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return)
+		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI)
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
@@ -290,7 +319,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		}
 
 		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun)
+		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI)
 	}
 }
 
@@ -322,5 +351,41 @@ func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, k
 		payload["task_path"] = taskPath
 	}
 	errObj, _ := json.Marshal(payload)
-	_ = r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now())
+	_ = r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now(), nil)
+}
+
+func (r *Runner) persistExecutionLogs(task *queue.TaskRun, stdout string, stderr string) *string {
+	if r.cfg.LogsDir == "" {
+		return nil
+	}
+	if stdout == "" && stderr == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(r.cfg.LogsDir, 0o700); err != nil {
+		r.logger.Warn("Failed to create logs dir", "error", err, "logs_dir", r.cfg.LogsDir)
+		return nil
+	}
+
+	filename := fmt.Sprintf("task-%d-attempt-%d.log", task.ResultID, task.Attempts)
+	path := filepath.Join(r.cfg.LogsDir, filename)
+
+	var b strings.Builder
+	b.WriteString("STDOUT:\n")
+	b.WriteString(stdout)
+	if !strings.HasSuffix(stdout, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("STDERR:\n")
+	b.WriteString(stderr)
+	if !strings.HasSuffix(stderr, "\n") {
+		b.WriteString("\n")
+	}
+
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		r.logger.Warn("Failed to persist task logs", "error", err, "path", path)
+		return nil
+	}
+
+	return &path
 }

@@ -93,3 +93,31 @@ func TestBindFlagsParsesAllowedTaskModules(t *testing.T) {
 		t.Fatalf("expected %v, got %v", want, cfg.AllowedTaskModules)
 	}
 }
+
+func TestLoadLogsDirFromEnv(t *testing.T) {
+	t.Setenv("REPROQ_LOGS_DIR", "/tmp/reproq-logs")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.LogsDir != "/tmp/reproq-logs" {
+		t.Fatalf("expected logs dir to be set, got %q", cfg.LogsDir)
+	}
+}
+
+func TestBindFlagsParsesLogsDir(t *testing.T) {
+	cfg := &Config{}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfg.BindFlags(fs)
+
+	if err := fs.Parse([]string{"--logs-dir", "/var/log/reproq"}); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.LogsDir != "/var/log/reproq" {
+		t.Fatalf("expected logs dir /var/log/reproq, got %q", cfg.LogsDir)
+	}
+}

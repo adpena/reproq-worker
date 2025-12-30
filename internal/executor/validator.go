@@ -21,6 +21,9 @@ func NewValidator(allowed []string) *Validator {
 // Validate checks if the task module path is authorized.
 func (v *Validator) Validate(taskPath string) error {
 	for _, m := range v.AllowedModules {
+		if m == "*" {
+			return nil
+		}
 		if strings.HasPrefix(taskPath, m) {
 			return nil
 		}

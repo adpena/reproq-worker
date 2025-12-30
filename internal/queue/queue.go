@@ -200,7 +200,7 @@ func (s *Service) Heartbeat(ctx context.Context, resultID int64, workerID string
 }
 
 // CompleteSuccess marks the task as SUCCESSFUL and triggers dependents.
-func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error {
+func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -217,10 +217,11 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 		    failed_at = NULL,
 		    leased_until = NULL,
 		    leased_by = NULL,
+		    logs_uri = COALESCE($4, logs_uri),
 		    updated_at = NOW()
 		WHERE result_id = $2 AND leased_by = $3 AND status = 'RUNNING'
 	`
-	res, err := tx.Exec(ctx, query, returnJSON, resultID, workerID)
+	res, err := tx.Exec(ctx, query, returnJSON, resultID, workerID, logsURI)
 	if err != nil {
 		return err
 	}
@@ -303,7 +304,7 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 }
 
 // CompleteFailure marks the task as FAILED or requeues it.
-func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorObj json.RawMessage, shouldRetry bool, nextRunAfter time.Time) error {
+func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorObj json.RawMessage, shouldRetry bool, nextRunAfter time.Time, logsURI *string) error {
 	status := StatusFailed
 	if shouldRetry {
 		status = StatusReady
@@ -320,6 +321,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 		    failed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    leased_until = NULL,
 		    leased_by = NULL,
+		    logs_uri = COALESCE($7, logs_uri),
 		    updated_at = NOW()
 		WHERE result_id = $4 AND leased_by = $5 AND status = 'RUNNING'
 	`
@@ -329,7 +331,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 	}
 	defer tx.Rollback(ctx)
 
-	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID, lastError)
+	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID, lastError, logsURI)
 	if err != nil {
 		return err
 	}
@@ -427,6 +429,76 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 	return tag.RowsAffected(), nil
 }
 
+// PruneExpired deletes task_runs where expires_at is in the past and status is not RUNNING.
+func (s *Service) PruneExpired(ctx context.Context, limit int, dryRun bool) (int64, error) {
+	if dryRun {
+		if limit > 0 {
+			query := `
+				SELECT COUNT(*) FROM (
+					SELECT 1
+					FROM task_runs
+					WHERE expires_at IS NOT NULL
+					  AND expires_at <= NOW()
+					  AND status <> 'RUNNING'
+					ORDER BY expires_at ASC
+					LIMIT $1
+				) expired
+			`
+			var count int64
+			if err := s.pool.QueryRow(ctx, query, limit).Scan(&count); err != nil {
+				return 0, err
+			}
+			return count, nil
+		}
+		query := `
+			SELECT COUNT(*)
+			FROM task_runs
+			WHERE expires_at IS NOT NULL
+			  AND expires_at <= NOW()
+			  AND status <> 'RUNNING'
+		`
+		var count int64
+		if err := s.pool.QueryRow(ctx, query).Scan(&count); err != nil {
+			return 0, err
+		}
+		return count, nil
+	}
+
+	if limit > 0 {
+		query := `
+			WITH expired AS (
+				SELECT result_id
+				FROM task_runs
+				WHERE expires_at IS NOT NULL
+				  AND expires_at <= NOW()
+				  AND status <> 'RUNNING'
+				ORDER BY expires_at ASC
+				LIMIT $1
+			)
+			DELETE FROM task_runs
+			USING expired
+			WHERE task_runs.result_id = expired.result_id
+		`
+		tag, err := s.pool.Exec(ctx, query, limit)
+		if err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), nil
+	}
+
+	query := `
+		DELETE FROM task_runs
+		WHERE expires_at IS NOT NULL
+		  AND expires_at <= NOW()
+		  AND status <> 'RUNNING'
+	`
+	tag, err := s.pool.Exec(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Replay creates a new READY task from an existing one.
 func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 	query := `
@@ -438,6 +510,31 @@ func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 	var newID int64
 	err := s.pool.QueryRow(ctx, query, resultID).Scan(&newID)
 	return newID, err
+}
+
+// ReplayBySpecHash creates a new READY task from the most recent matching spec_hash.
+func (s *Service) ReplayBySpecHash(ctx context.Context, specHash string) (int64, int64, error) {
+	query := `
+		WITH source AS (
+			SELECT result_id, backend_alias, queue_name, priority, spec_json, spec_hash, max_attempts, timeout_seconds, lock_key
+			FROM task_runs
+			WHERE spec_hash = $1
+			ORDER BY result_id DESC
+			LIMIT 1
+		),
+		inserted AS (
+			INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key)
+			SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key
+			FROM source
+			RETURNING result_id
+		)
+		SELECT inserted.result_id, source.result_id
+		FROM inserted, source
+	`
+	var newID int64
+	var sourceID int64
+	err := s.pool.QueryRow(ctx, query, specHash).Scan(&newID, &sourceID)
+	return sourceID, newID, err
 }
 
 func (s *Service) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {

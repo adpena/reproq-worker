@@ -8,6 +8,7 @@
 ## Secrets and configuration
 - [ ] Use `METRICS_AUTH_TOKEN` when exposing `/metrics` or `/healthz`.
 - [ ] Set `METRICS_ALLOW_CIDRS` to restrict metrics/health to trusted networks.
+- [ ] Use `METRICS_TLS_CERT` and `METRICS_TLS_KEY` to serve metrics over HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 - [ ] Keep metrics auth rate limiting enabled; tune via `METRICS_AUTH_LIMIT` and `METRICS_AUTH_WINDOW`.
 - [ ] Store DSNs and tokens in a secrets manager (not shell history).
 - [ ] Set `ALLOWED_TASK_MODULES` to the minimal allow-list for your deployment.
@@ -16,6 +17,8 @@
 - [ ] Bind metrics/health to `127.0.0.1` or a private interface.
 - [ ] Enforce ingress ACLs or a reverse proxy when public exposure is required.
 - [ ] Restrict worker egress at the container or host firewall layer.
+- [ ] Deny outbound traffic by default and allow only required destinations (DB, storage, third-party APIs).
+- [ ] Block cloud metadata endpoints (for example `169.254.169.254`) unless explicitly required.
 
 ## Logging and data handling
 - [ ] Prefer `--payload-mode stdin` or `file` for sensitive payloads.

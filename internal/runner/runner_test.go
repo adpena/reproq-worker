@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,11 +43,11 @@ func (f *fakeQueue) Heartbeat(ctx context.Context, resultID int64, workerID stri
 	return false, nil
 }
 
-func (f *fakeQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error {
+func (f *fakeQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (f *fakeQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time) error {
+func (f *fakeQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
 	return nil
 }
 
@@ -81,11 +83,11 @@ func (v *validationQueue) Heartbeat(ctx context.Context, resultID int64, workerI
 	return false, nil
 }
 
-func (v *validationQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error {
+func (v *validationQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (v *validationQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time) error {
+func (v *validationQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
 	v.failureCalled = true
 	v.failureJSON = errorsJSON
 	v.retry = retry
@@ -99,6 +101,50 @@ type recordingExecutor struct {
 func (r *recordingExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	r.called = true
 	return nil, "", "", nil
+}
+
+type cancelQueue struct {
+	failureCalled bool
+	failureJSON   json.RawMessage
+	retry         bool
+}
+
+func (c *cancelQueue) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {
+	return nil
+}
+
+func (c *cancelQueue) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+	return 0, nil
+}
+
+func (c *cancelQueue) UpdateWorkerHeartbeat(ctx context.Context, id string) error {
+	return nil
+}
+
+func (c *cancelQueue) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error) {
+	return nil, queue.ErrNoTasks
+}
+
+func (c *cancelQueue) Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error) {
+	return true, nil
+}
+
+func (c *cancelQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
+	return nil
+}
+
+func (c *cancelQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
+	c.failureCalled = true
+	c.failureJSON = errorsJSON
+	c.retry = retry
+	return nil
+}
+
+type blockingExecutor struct{}
+
+func (b *blockingExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
+	<-ctx.Done()
+	return nil, "", "", ctx.Err()
 }
 
 type roundRobinQueue struct {
@@ -132,11 +178,11 @@ func (r *roundRobinQueue) Heartbeat(ctx context.Context, resultID int64, workerI
 	return false, nil
 }
 
-func (r *roundRobinQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error {
+func (r *roundRobinQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (r *roundRobinQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time) error {
+func (r *roundRobinQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
 	return nil
 }
 
@@ -263,5 +309,91 @@ func TestRunnerRejectsUnauthorizedTask(t *testing.T) {
 	}
 	if payload["kind"] != "security_violation" {
 		t.Fatalf("expected kind security_violation, got %v", payload["kind"])
+	}
+}
+
+func TestPersistExecutionLogs(t *testing.T) {
+	logsDir := t.TempDir()
+	cfg := &config.Config{
+		LogsDir:        logsDir,
+		MaxConcurrency: 1,
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := New(cfg, &fakeQueue{}, &fakeExecutor{}, logger)
+
+	task := &queue.TaskRun{ResultID: 42, Attempts: 2}
+	logsURI := r.persistExecutionLogs(task, "stdout-text", "stderr-text")
+	if logsURI == nil {
+		t.Fatal("expected logs URI to be set")
+	}
+
+	data, err := os.ReadFile(*logsURI)
+	if err != nil {
+		t.Fatalf("failed to read logs file: %v", err)
+	}
+	contents := string(data)
+	if !strings.Contains(contents, "STDOUT:\nstdout-text") {
+		t.Fatalf("stdout not persisted, got %q", contents)
+	}
+	if !strings.Contains(contents, "STDERR:\nstderr-text") {
+		t.Fatalf("stderr not persisted, got %q", contents)
+	}
+}
+
+func TestSleepHandlesZeroBackoffRange(t *testing.T) {
+	cfg := &config.Config{
+		PollMinBackoff: 0,
+		PollMaxBackoff: 0,
+	}
+	r := &Runner{cfg: cfg}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	r.sleep(ctx)
+}
+
+func TestRunnerHandlesCancellation(t *testing.T) {
+	cfg := &config.Config{
+		WorkerID:            "worker-1",
+		QueueNames:          []string{"default"},
+		AllowedTaskModules:  []string{"allowed."},
+		MaxConcurrency:      1,
+		LeaseSeconds:        60,
+		HeartbeatSeconds:    1,
+		ExecTimeout:         5 * time.Second,
+		PriorityAgingFactor: 0,
+	}
+
+	q := &cancelQueue{}
+	exec := &blockingExecutor{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := New(cfg, q, exec, logger)
+
+	r.pool <- struct{}{}
+	r.wg.Add(1)
+
+	task := &queue.TaskRun{
+		ResultID:  1,
+		QueueName: "default",
+		SpecJSON:  json.RawMessage(`{"task_path":"allowed.task"}`),
+		SpecHash:  "hash",
+		Attempts:  1,
+		MaxAttempts: 1,
+	}
+	r.runTask(context.Background(), task)
+
+	if !q.failureCalled {
+		t.Fatal("expected CompleteFailure to be called for cancellation")
+	}
+	if q.retry {
+		t.Fatal("expected cancellation to be terminal (no retry)")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(q.failureJSON, &payload); err != nil {
+		t.Fatalf("invalid cancellation payload: %v", err)
+	}
+	if payload["kind"] != "cancelled" {
+		t.Fatalf("expected kind cancelled, got %v", payload["kind"])
 	}
 }

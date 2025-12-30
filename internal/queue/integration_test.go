@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -68,13 +69,13 @@ func TestQueueIntegration(t *testing.T) {
 	}
 
 	// 4. Complete Success with Fencing (Correct Worker)
-	err = s.CompleteSuccess(ctx, task.ResultID, workerID, json.RawMessage(`{"res":"ok"}`))
+	err = s.CompleteSuccess(ctx, task.ResultID, workerID, json.RawMessage(`{"res":"ok"}`), nil)
 	if err != nil {
 		t.Errorf("completion failed: %v", err)
 	}
 
 	// 5. Verify Fencing (Wrong Worker tries to update completed task)
-	err = s.CompleteSuccess(ctx, task.ResultID, "wrong-worker", json.RawMessage(`{}`))
+	err = s.CompleteSuccess(ctx, task.ResultID, "wrong-worker", json.RawMessage(`{}`), nil)
 	if err == nil {
 		t.Error("expected fencing error for wrong worker, got nil")
 	}
@@ -116,7 +117,7 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task, got nil")
 	}
-	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(-time.Second))
+	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(-time.Second), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task on attempt 2, got nil")
 	}
-	err = s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now())
+	err = s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now(), nil)
 
 	pool.QueryRow(ctx, "SELECT status FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&status)
 	if status != "FAILED" {
@@ -342,7 +343,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Fatalf("failed to insert workflow run: %v", err)
 	}
 
-	if err := s.CompleteSuccess(ctx, id1, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
+	if err := s.CompleteSuccess(ctx, id1, "w1", json.RawMessage(`{"ok": true}`), nil); err != nil {
 		t.Fatalf("complete success task 1: %v", err)
 	}
 
@@ -375,7 +376,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Errorf("expected callback status WAITING, got %s", callbackStatus)
 	}
 
-	if err := s.CompleteSuccess(ctx, id2, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
+	if err := s.CompleteSuccess(ctx, id2, "w1", json.RawMessage(`{"ok": true}`), nil); err != nil {
 		t.Fatalf("complete success task 2: %v", err)
 	}
 
@@ -584,7 +585,7 @@ func TestTriageLifecycle(t *testing.T) {
 		t.Fatalf("failed to claim task: %v", err)
 	}
 
-	err = s.CompleteFailure(ctx, task.ResultID, "w-triage-1", json.RawMessage(`{"message":"boom"}`), false, time.Now())
+	err = s.CompleteFailure(ctx, task.ResultID, "w-triage-1", json.RawMessage(`{"message":"boom"}`), false, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("failed to complete failure: %v", err)
 	}
@@ -639,5 +640,209 @@ func TestTriageLifecycle(t *testing.T) {
 	}
 	if lastError.Valid || failedAt.Valid {
 		t.Fatalf("expected last_error and failed_at to be cleared, got %v %v", lastError, failedAt)
+	}
+}
+
+func TestCompleteSuccessSetsLogsURI(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	specHash := "logshash" + strings.Repeat("2", 57)
+	var resultID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
+		VALUES ($1, 'default', '{}', 'READY', NOW())
+		RETURNING result_id
+	`, specHash).Scan(&resultID)
+	if err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	task, err := s.Claim(ctx, "w-logs-1", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("failed to claim: %v", err)
+	}
+
+	logsPath := "/tmp/reproq-test-logs.log"
+	err = s.CompleteSuccess(ctx, task.ResultID, "w-logs-1", json.RawMessage(`{"res":"ok"}`), &logsPath)
+	if err != nil {
+		t.Fatalf("completion failed: %v", err)
+	}
+
+	var stored sql.NullString
+	err = pool.QueryRow(ctx, "SELECT logs_uri FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&stored)
+	if err != nil {
+		t.Fatalf("failed to read logs_uri: %v", err)
+	}
+	if !stored.Valid || stored.String != logsPath {
+		t.Fatalf("expected logs_uri %q, got %v", logsPath, stored)
+	}
+}
+
+func TestReplayBySpecHash(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	specHash := "replayhash" + strings.Repeat("3", 55)
+	var firstID int64
+	var secondID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.replay"}', 'FAILED', NOW())
+		RETURNING result_id
+	`, specHash).Scan(&firstID)
+	if err != nil {
+		t.Fatalf("failed to insert first task: %v", err)
+	}
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.replay"}', 'SUCCESSFUL', NOW())
+		RETURNING result_id
+	`, specHash).Scan(&secondID)
+	if err != nil {
+		t.Fatalf("failed to insert second task: %v", err)
+	}
+
+	sourceID, newID, err := s.ReplayBySpecHash(ctx, specHash)
+	if err != nil {
+		t.Fatalf("replay by spec_hash failed: %v", err)
+	}
+	if sourceID != secondID {
+		t.Fatalf("expected sourceID %d, got %d", secondID, sourceID)
+	}
+	if newID == 0 {
+		t.Fatal("expected new result_id to be set")
+	}
+
+	var status string
+	var storedHash string
+	err = pool.QueryRow(ctx, "SELECT status, spec_hash FROM task_runs WHERE result_id = $1", newID).Scan(&status, &storedHash)
+	if err != nil {
+		t.Fatalf("failed to fetch replayed task: %v", err)
+	}
+	if status != "READY" {
+		t.Fatalf("expected READY status, got %s", status)
+	}
+	if storedHash != specHash {
+		t.Fatalf("expected spec_hash %s, got %s", specHash, storedHash)
+	}
+
+	_, _, err = s.ReplayBySpecHash(ctx, "missinghash"+strings.Repeat("4", 54))
+	if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected ErrNoRows for missing spec_hash, got %v", err)
+	}
+}
+
+func TestPruneExpired(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	var expiredReadyID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), NOW() - INTERVAL '1 hour')
+		RETURNING result_id
+	`, "expiredready"+strings.Repeat("5", 52)).Scan(&expiredReadyID)
+	if err != nil {
+		t.Fatalf("failed to insert expired ready: %v", err)
+	}
+
+	var expiredSuccessID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES ($1, 'default', '{}', 'SUCCESSFUL', NOW(), NOW() - INTERVAL '2 hours')
+		RETURNING result_id
+	`, "expiredsuccess"+strings.Repeat("6", 50)).Scan(&expiredSuccessID)
+	if err != nil {
+		t.Fatalf("failed to insert expired successful: %v", err)
+	}
+
+	var futureID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), NOW() + INTERVAL '1 hour')
+		RETURNING result_id
+	`, "futuretask"+strings.Repeat("7", 54)).Scan(&futureID)
+	if err != nil {
+		t.Fatalf("failed to insert future task: %v", err)
+	}
+
+	var runningID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at, leased_by)
+		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), NOW() - INTERVAL '1 hour', 'w1')
+		RETURNING result_id
+	`, "runningtask"+strings.Repeat("8", 53)).Scan(&runningID)
+	if err != nil {
+		t.Fatalf("failed to insert running task: %v", err)
+	}
+
+	count, err := s.PruneExpired(ctx, 0, true)
+	if err != nil {
+		t.Fatalf("dry run prune failed: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 expired tasks, got %d", count)
+	}
+
+	deleted, err := s.PruneExpired(ctx, 0, false)
+	if err != nil {
+		t.Fatalf("prune failed: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected 2 tasks pruned, got %d", deleted)
+	}
+
+	var remaining int
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM task_runs WHERE result_id IN ($1, $2)", expiredReadyID, expiredSuccessID).Scan(&remaining)
+	if err != nil {
+		t.Fatalf("failed to check deleted tasks: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expected expired tasks to be deleted, found %d", remaining)
+	}
+
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM task_runs WHERE result_id IN ($1, $2)", futureID, runningID).Scan(&remaining)
+	if err != nil {
+		t.Fatalf("failed to check remaining tasks: %v", err)
+	}
+	if remaining != 2 {
+		t.Fatalf("expected future and running tasks to remain, found %d", remaining)
 	}
 }

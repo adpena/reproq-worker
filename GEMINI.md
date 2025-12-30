@@ -19,7 +19,7 @@ The project follows a modular Go structure:
 - `internal/config`: Centralized configuration management via environment variables and CLI flags.
 - `internal/db`: Postgres connection pool configuration and health checks.
 - `internal/logging`: Structured logging setup (slog).
-- `internal/web`: HTTP health/metrics server (present, not wired by default).
+- `internal/web`: HTTP health/metrics server (enabled via metrics flags).
 
 ## Building and Running
 
@@ -27,8 +27,9 @@ The project follows a modular Go structure:
 - **Build**: `go build -o reproq ./cmd/reproq`
 - **Run Worker**: `./reproq worker --dsn "postgres://..."`
 - **Start Scheduler**: `./reproq beat`
-- **Replay Task**: `./reproq replay --dsn "postgres://..." --id 123`
+- **Replay Task**: `./reproq replay --dsn "postgres://..." --id 123` or `--spec-hash <hash>`
 - **Set Rate Limit**: `./reproq limit set --key "global" --rate 10`
+- **Prune Expired**: `./reproq prune expired --dsn "postgres://..."`
 - **Version**: `./reproq --version`
 
 ### Torture Tool (Separate Binary)
@@ -54,9 +55,10 @@ go build -o reproq ./cmd/reproq
 ```
 
 ### Current Behavioral Notes
-- Queue polling currently targets only the first configured queue.
-- Worker registration writes a fixed version string in `RegisterWorker`.
-- `DATABASE_URL`, `WORKER_ID`, `PRIORITY_AGING_FACTOR`, and `HEALTH_ADDR` are the only env vars read by the worker config.
+- Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).
+- Worker registration uses the CLI `Version` constant.
+- Config reads `DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
+- `HEALTH_ADDR` is a legacy env var and is not wired to the metrics server (use `--metrics-addr` / `METRICS_ADDR`).
 
 ## Reliability Invariants
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.

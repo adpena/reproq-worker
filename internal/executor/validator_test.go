@@ -24,3 +24,16 @@ func TestValidator(t *testing.T) {
 		}
 	}
 }
+
+func TestValidatorAllowAllWildcard(t *testing.T) {
+	v := NewValidator([]string{"*"})
+	paths := []string{
+		"accounts.tasks.notify_deploy_success_task",
+		"any.module.path",
+	}
+	for _, path := range paths {
+		if err := v.Validate(path); err != nil {
+			t.Fatalf("expected wildcard to allow %q, got %v", path, err)
+		}
+	}
+}

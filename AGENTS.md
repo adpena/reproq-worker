@@ -31,7 +31,7 @@ GOOS=windows GOARCH=amd64 go build -o reproq-windows-amd64.exe ./cmd/reproq
 - **Protocol**: The JSON contract between the Go worker and `python -m reproq_django.executor` is strict. Changes must be applied to both simultaneously.
 
 ## Code/Doc Alignment Notes
-- **Worker DSN**: `reproq worker` calls `config.Load()` before flag parsing, so `DATABASE_URL` must be set even if `--dsn` is provided. Either document this or fix the load path.
-- **Worker Version**: `RegisterWorker` currently writes a hard-coded version string; keep it in sync with `Version` or wire it through.
+- **Worker DSN**: `--dsn` overrides `DATABASE_URL`; docs should reflect that `DATABASE_URL` is optional when flags are provided.
+- **Worker Version**: `RegisterWorker` uses the CLI `Version` constant; bump it on logic changes and keep `reproq --version` aligned.
 - **Torture Tool**: `cmd/torture` builds a separate binary and is not a `reproq` subcommand.
 - **Statuses**: Workflow logic uses `WAITING`; keep status lists and docs in sync.

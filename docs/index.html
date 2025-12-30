@@ -97,11 +97,13 @@ python manage.py reproq worker</pre>
 
                 <h3 class="text-xl font-bold mt-8">replay</h3>
                 <p>Re-enqueues a task.</p>
-                <pre>./reproq replay --id 12345</pre>
+                <pre>./reproq replay --id 12345
+./reproq replay --spec-hash &lt;hash&gt;</pre>
 
                 <h3 class="text-xl font-bold mt-8">cancel</h3>
                 <p>Request cancellation of a running task.</p>
                 <pre>./reproq cancel --id 12345</pre>
+                <p>Cancellation is enforced on the next worker heartbeat; cancelled runs are recorded as <code>FAILED</code> with a <code>kind=cancelled</code> error payload.</p>
 
                 <h3 class="text-xl font-bold mt-8">triage</h3>
                 <p>List, inspect, and retry failed tasks.</p>
@@ -109,6 +111,11 @@ python manage.py reproq worker</pre>
 ./reproq triage inspect --id 12345
 ./reproq triage retry --id 12345
 ./reproq triage retry --all</pre>
+
+                <h3 class="text-xl font-bold mt-8">prune</h3>
+                <p>Delete expired tasks (expires_at in the past, excluding RUNNING).</p>
+                <pre>./reproq prune expired --dry-run
+./reproq prune expired --limit 1000</pre>
 
                 <h3 class="text-xl font-bold mt-8">limit</h3>
                 <p>Manage rate limits (token buckets) in Postgres.</p>
@@ -169,6 +176,7 @@ python manage.py reproq worker</pre>
 ./reproq worker --metrics-port 9090</pre>
                 <p>For security, bind to localhost (e.g., <code>--metrics-addr 127.0.0.1:9090</code>) or set <code>METRICS_AUTH_TOKEN</code> to require a bearer token.</p>
                 <p>Restrict access by IP/CIDR with <code>METRICS_ALLOW_CIDRS</code> (for example <code>127.0.0.1/32,10.0.0.0/8</code>).</p>
+                <p>Enable HTTPS with <code>METRICS_TLS_CERT</code> and <code>METRICS_TLS_KEY</code>; add <code>METRICS_TLS_CLIENT_CA</code> to require mTLS client certificates.</p>
                 <p>Unauthorized requests are rate-limited (defaults: 30/min per remote host). Adjust via <code>--metrics-auth-limit</code> and <code>--metrics-auth-window</code>.</p>
                 <p>Exposed metrics include:</p>
                 <ul>

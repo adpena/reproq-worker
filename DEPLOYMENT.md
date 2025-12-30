@@ -67,9 +67,12 @@ Use this checklist when exposing `/metrics` or `/healthz` in production.
    - `METRICS_AUTH_TOKEN=...` or `--metrics-auth-token ...`
 3. Restrict access by IP or CIDR when possible:
    - `METRICS_ALLOW_CIDRS=127.0.0.1/32,10.0.0.0/8`
-4. Keep unauthorized rate limiting enabled:
+4. Enable TLS (and optionally mTLS):
+   - `--metrics-tls-cert /path/cert.pem --metrics-tls-key /path/key.pem`
+   - Add `--metrics-tls-client-ca /path/ca.pem` to require client certificates.
+5. Keep unauthorized rate limiting enabled:
    - Defaults are `--metrics-auth-limit 30` and `--metrics-auth-window 1m`.
-5. If public access is required, front with a reverse proxy:
+6. If public access is required, front with a reverse proxy:
    - Enforce TLS and IP allow-lists at the proxy/ingress.
-6. Validate the endpoint from the intended network only:
+7. Validate the endpoint from the intended network only:
    - `curl -H "Authorization: Bearer <token>" http://127.0.0.1:9090/healthz`

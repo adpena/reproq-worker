@@ -27,16 +27,16 @@ Deliverables
 - Wire health/metrics HTTP server and config. (BL-007)
 - Enforce task path allow-list validation. (BL-008)
 - Redact sensitive payloads from logs. (BL-009)
-- Add replay by spec_hash for deterministic replays. (BL-010)
-- Resolve CLI/documentation parity for listed commands. (BL-011)
+- Add replay by spec_hash for deterministic replays. (BL-010, completed 2025-12-30)
+- Resolve CLI/documentation parity for listed commands. (BL-011, completed 2025-12-30)
 
 ## Phase 2: Productization and UX (P2)
 Goal: make the worker easier to operate at scale and easier to debug.
 
 Deliverables
-- Persist stdout/stderr or artifact URIs for executions. (BL-012)
-- Implement retention/cleanup using `expires_at`. (BL-013)
-- Decide on and implement missing CLI utilities (schedule/verify/loadgen/torture). (BL-014)
+- Persist stdout/stderr or artifact URIs for executions. (BL-012, completed 2025-12-30)
+- Implement retention/cleanup using `expires_at`. (BL-013, completed 2025-12-30)
+- Decide on and implement missing CLI utilities (schedule/verify/loadgen/torture). (BL-014, completed 2025-12-30)
 
 ## Sequencing notes
 - Items that add or change schema require a migration and cross-project model sync.

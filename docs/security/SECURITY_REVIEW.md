@@ -14,6 +14,7 @@ This review covers the Go worker runtime, metrics/health endpoints, and logging.
 - HTTP server timeouts added to the metrics/health server.
 - Unauthorized metrics/health requests are logged with path/method/remote address.
 - Unauthorized metrics/health requests are rate-limited per remote host (configurable via `METRICS_AUTH_LIMIT`, `METRICS_AUTH_WINDOW`, `METRICS_AUTH_MAX_ENTRIES`).
+- Metrics/health endpoint can be served over TLS with optional mTLS client certificate verification.
 - Production builds (`-tags prod`) reject `--payload-mode inline`.
 
 ## Risks and recommendations
@@ -43,7 +44,14 @@ Recommendation:
 - In-process rate limiting is enabled for unauthorized hits, but prefer reverse proxy or ingress controls.
 - Add rate limiting at the reverse proxy or ingress.
 
+### Egress policy baseline
+Recommendation:
+- Deny outbound traffic by default and allow only required destinations (DB, object storage, third-party APIs).
+- Block cloud metadata IPs (for example `169.254.169.254`) unless explicitly required.
+- If tasks need internal services, allow the minimal private CIDRs instead of broad `0.0.0.0/0`.
+- Document any exceptions so operators can audit outbound connectivity.
+
 ## Follow-up items
-- Keep `docs/security/SECURITY_CHECKLIST.md` in sync with new features.
-- Evaluate mTLS support for the metrics endpoint.
-- Define an egress policy for worker hosts.
+- [x] Keep `docs/security/SECURITY_CHECKLIST.md` in sync with new features.
+- [x] Evaluate mTLS support for the metrics endpoint (implemented via `METRICS_TLS_*`).
+- [x] Define an egress policy baseline for worker hosts (documented above).

@@ -16,7 +16,7 @@ The project follows a standard Go project layout, optimized for a single-binary 
 │   ├── executor/         # External process execution (Python).
 │   ├── runner/           # Worker orchestration loop and heartbeat management.
 │   ├── logging/          # Structured logging setup (slog).
-│   └── web/              # Health/metrics HTTP server (present, not wired by default).
+│   └── web/              # Health/metrics HTTP server (enabled via metrics flags).
 ├── migrations/           # SQL migration files.
 ├── go.mod
 ├── go.sum
@@ -30,6 +30,10 @@ The binary supports multiple subcommands:
 *   `worker`: The primary execution node. Polls the database for READY tasks and executes them.
 *   `beat`: The scheduler. Enqueues `PeriodicTask` entries into the `task_runs` table based on cron expressions.
 *   `replay`: Utility to re-enqueue a specific task by its ID.
+*   `cancel`: Marks a running task as cancellation requested.
+*   `triage`: Lists, inspects, and retries failed tasks.
+*   `limit`: Manages rate limits in the database.
+*   `prune`: Deletes expired tasks based on `expires_at`.
 
 ### Queue Service (`internal/queue`)
 Encapsulates all PostgreSQL interaction using `pgx`.

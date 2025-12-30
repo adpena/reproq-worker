@@ -21,6 +21,13 @@ P2: productization, UX, and longer-term features.
 - 2025-12-29: Security sweep (unauthorized rate limiting, prod inline payload block, security checklist).
 - 2025-12-29: Security sweep (metrics auth rate limit config + runbook guidance).
 - 2025-12-29: Security sweep (metrics/health CIDR allow-list).
+- 2025-12-30: Completed BL-010 (replay by spec_hash).
+- 2025-12-30: Completed BL-011 (CLI/docs parity audit).
+- 2025-12-30: Completed BL-012 (persist stdout/stderr via logs_uri).
+- 2025-12-30: Completed BL-013 (expires_at pruning command).
+- 2025-12-30: Completed BL-014 (utility command decision: keep torture separate).
+- 2025-12-30: Added YAML/TOML config file support and templates for worker/beat.
+- 2025-12-30: Completed security review follow-ups (metrics TLS/mTLS support, egress policy guidance, checklist update).
 
 ## Backlog items
 
@@ -209,6 +216,7 @@ Acceptance criteria
 | Type | Feature |
 | Impact | Deterministic replay is only possible by result_id |
 | Touchpoints | `cmd/reproq/main.go`, `internal/queue/queue.go` |
+| Status | Completed (2025-12-30) |
 
 Problem
 Replay is only supported by result ID, not by spec hash.
@@ -227,6 +235,7 @@ Acceptance criteria
 | Type | Doc/UX |
 | Impact | Docs and project notes list commands that do not exist |
 | Touchpoints | `README.md`, `docs/index.html`, `GEMINI.md`, `cmd/reproq/main.go` |
+| Status | Completed (2025-12-30) |
 
 Problem
 Docs and notes reference commands such as `triage`, `schedule`, `verify`, `loadgen`, and `cancel` that are not in the CLI.
@@ -238,6 +247,9 @@ Acceptance criteria
 - CLI help, README, and docs are aligned with shipped commands.
 - Any removed commands are documented as future work in the roadmap.
 
+Outcome
+- CLI/docs parity updated; missing utility commands remain out of scope and are tracked as a closed decision.
+
 ### BL-012: Persist stdout/stderr or artifact URIs
 | Field | Value |
 | --- | --- |
@@ -245,6 +257,7 @@ Acceptance criteria
 | Type | Feature |
 | Impact | Debugging is harder without task output capture |
 | Touchpoints | `internal/executor/executor.go`, `internal/runner/runner.go`, `internal/queue/queue.go` |
+| Status | Completed (2025-12-30) |
 
 Problem
 Executor output is discarded, and `logs_uri`/`artifacts_uri` are never set.
@@ -263,6 +276,7 @@ Acceptance criteria
 | Type | Feature |
 | Impact | DB grows unbounded without task cleanup |
 | Touchpoints | `internal/queue/queue.go`, new migration or worker job |
+| Status | Completed (2025-12-30) |
 
 Problem
 `expires_at` exists but is unused.
@@ -281,6 +295,7 @@ Acceptance criteria
 | Type | Feature/UX |
 | Impact | Project notes mention utilities that are not in the main binary |
 | Touchpoints | `cmd/reproq/main.go`, `cmd/torture/main.go`, `GEMINI.md` |
+| Status | Completed (2025-12-30) |
 
 Problem
 Utility commands are referenced but not consistently shipped.
@@ -291,3 +306,6 @@ Either add these commands to the primary CLI, or remove the references and keep 
 Acceptance criteria
 - Clear decision and consistent packaging.
 - Docs and release artifacts match the decision.
+
+Decision
+- Keep `cmd/torture` as a separate binary; do not add `schedule`, `verify`, or `loadgen` to the main CLI.

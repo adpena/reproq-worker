@@ -44,6 +44,8 @@ type Config struct {
 
 	MaxStderrBytes int
 
+	LogsDir string
+
 	ExecTimeout time.Duration
 
 	MaxAttemptsDefault int
@@ -78,58 +80,25 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.Float64Var(&c.PriorityAgingFactor, "priority-aging-factor", c.PriorityAgingFactor, "Seconds of waiting per priority point (0 to disable)")
 
+	fs.StringVar(&c.LogsDir, "logs-dir", c.LogsDir, "Directory to persist stdout/stderr logs (empty disables)")
+
 }
 
-func Load() (*Config, error) {
+func DefaultConfig() *Config {
 
-	dbURL := os.Getenv("DATABASE_URL")
+	hostname, _ := os.Hostname()
 
-	workerID := os.Getenv("WORKER_ID")
+	workerID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
 
-	if workerID == "" {
+	return &Config{
 
-		hostname, _ := os.Hostname()
-
-		workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
-
-	}
-
-	healthAddr := os.Getenv("HEALTH_ADDR")
-
-	if healthAddr == "" {
-
-		healthAddr = ":8080"
-
-	}
-
-	priorityAgingFactor := 60.0
-	if val := os.Getenv("PRIORITY_AGING_FACTOR"); val != "" {
-		parsed, err := strconv.ParseFloat(val, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid PRIORITY_AGING_FACTOR: %w", err)
-		}
-		priorityAgingFactor = parsed
-	}
-
-	queueNames := []string{"default"}
-	if val := os.Getenv("QUEUE_NAMES"); val != "" {
-		queueNames = parseQueueList(val)
-	}
-
-	allowedModules := []string{}
-	if val := os.Getenv("ALLOWED_TASK_MODULES"); val != "" {
-		allowedModules = parseCommaList(val)
-	}
-
-	c := &Config{
-
-		DatabaseURL: dbURL,
+		DatabaseURL: "",
 
 		WorkerID: workerID,
 
-		QueueNames: queueNames,
+		QueueNames: []string{"default"},
 
-		AllowedTaskModules: allowedModules,
+		AllowedTaskModules: []string{},
 
 		MaxConcurrency: 10,
 
@@ -155,15 +124,64 @@ func Load() (*Config, error) {
 
 		MaxStderrBytes: 1024 * 1024,
 
+		LogsDir: "",
+
 		ExecTimeout: 1 * time.Hour,
 
 		MaxAttemptsDefault: 3,
 
 		ShutdownTimeout: 30 * time.Second,
 
-		HealthAddr: healthAddr,
+		HealthAddr: ":8080",
 
-		PriorityAgingFactor: priorityAgingFactor,
+		PriorityAgingFactor: 60.0,
+	}
+
+}
+
+func ApplyEnv(c *Config) error {
+
+	if val := os.Getenv("DATABASE_URL"); val != "" {
+		c.DatabaseURL = val
+	}
+
+	if val := os.Getenv("WORKER_ID"); val != "" {
+		c.WorkerID = val
+	}
+
+	if val := os.Getenv("QUEUE_NAMES"); val != "" {
+		c.QueueNames = parseQueueList(val)
+	}
+
+	if val := os.Getenv("ALLOWED_TASK_MODULES"); val != "" {
+		c.AllowedTaskModules = parseCommaList(val)
+	}
+
+	if val := os.Getenv("REPROQ_LOGS_DIR"); val != "" {
+		c.LogsDir = val
+	}
+
+	if val := os.Getenv("HEALTH_ADDR"); val != "" {
+		c.HealthAddr = val
+	}
+
+	if val := os.Getenv("PRIORITY_AGING_FACTOR"); val != "" {
+		parsed, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return fmt.Errorf("invalid PRIORITY_AGING_FACTOR: %w", err)
+		}
+		c.PriorityAgingFactor = parsed
+	}
+
+	return nil
+
+}
+
+func Load() (*Config, error) {
+
+	c := DefaultConfig()
+	if err := ApplyEnv(c); err != nil {
+		return nil, err
 	}
 
 	return c, nil

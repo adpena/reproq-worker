@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,15 +18,17 @@ type Server struct {
 	token   string
 	limiter *authLimiter
 	allow   *CIDRAllowlist
+	tls     *tls.Config
 }
 
-func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist) *Server {
+func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist, tlsConfig *tls.Config) *Server {
 	return &Server{
 		pool:    pool,
 		addr:    addr,
 		token:   token,
 		limiter: newAuthLimiter(authLimit, authWindow, authMaxEntries),
 		allow:   allowlist,
+		tls:     tlsConfig,
 	}
 }
 
@@ -73,6 +76,9 @@ func (s *Server) Start(ctx context.Context) error {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	if s.tls != nil {
+		server.TLSConfig = s.tls
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -81,6 +87,9 @@ func (s *Server) Start(ctx context.Context) error {
 		server.Shutdown(shutdownCtx)
 	}()
 
+	if s.tls != nil {
+		return server.ListenAndServeTLS("", "")
+	}
 	return server.ListenAndServe()
 }
 
