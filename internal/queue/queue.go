@@ -315,7 +315,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 		SET status = $1,
 		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    errors_json = errors_json || $2::jsonb,
-		    run_after = CASE WHEN $1 = 'FAILED' THEN NULL ELSE $3 END,
+		    run_after = CASE WHEN $1 = 'FAILED' THEN NULL ELSE $3::timestamptz END,
 		    last_error = CASE WHEN $1 = 'FAILED' THEN $6 ELSE NULL END,
 		    failed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    leased_until = NULL,
