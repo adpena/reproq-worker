@@ -345,20 +345,33 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Fatalf("complete success task 1: %v", err)
 	}
 
-	var waitCount int
-	var status string
+	var wfStatus string
+	var successCount int
+	var failureCount int
 	err = pool.QueryRow(ctx, `
-		SELECT wait_count, status FROM task_runs
-		WHERE workflow_id = $1 AND parent_id IS NULL AND status = 'WAITING'
-	`, workflowID).Scan(&waitCount, &status)
+		SELECT status, success_count, failure_count FROM workflow_runs
+		WHERE workflow_id = $1
+	`, workflowID).Scan(&wfStatus, &successCount, &failureCount)
 	if err != nil {
-		t.Fatalf("failed to read callback after first completion: %v", err)
+		t.Fatalf("failed to read workflow after first completion: %v", err)
 	}
-	if waitCount != 1 {
-		t.Errorf("expected wait_count 1, got %d", waitCount)
+	if successCount != 1 {
+		t.Errorf("expected success_count 1, got %d", successCount)
 	}
-	if status != "WAITING" {
-		t.Errorf("expected status WAITING, got %s", status)
+	if failureCount != 0 {
+		t.Errorf("expected failure_count 0, got %d", failureCount)
+	}
+
+	var callbackStatus string
+	err = pool.QueryRow(ctx, `
+		SELECT status FROM task_runs
+		WHERE result_id = $1
+	`, callbackID).Scan(&callbackStatus)
+	if err != nil {
+		t.Fatalf("failed to read callback status after first completion: %v", err)
+	}
+	if callbackStatus != "WAITING" {
+		t.Errorf("expected callback status WAITING, got %s", callbackStatus)
 	}
 
 	if err := s.CompleteSuccess(ctx, id2, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
@@ -366,19 +379,28 @@ func TestWorkflowChordRelease(t *testing.T) {
 	}
 
 	err = pool.QueryRow(ctx, `
-		SELECT wait_count, status FROM task_runs
+		SELECT status, success_count, failure_count FROM workflow_runs
 		WHERE workflow_id = $1
-		  AND parent_id IS NULL
-		  AND status IN ('READY', 'WAITING')
-	`, workflowID).Scan(&waitCount, &status)
+	`, workflowID).Scan(&wfStatus, &successCount, &failureCount)
 	if err != nil {
-		t.Fatalf("failed to read callback after second completion: %v", err)
+		t.Fatalf("failed to read workflow after second completion: %v", err)
 	}
-	if waitCount != 0 {
-		t.Errorf("expected wait_count 0, got %d", waitCount)
+	if successCount != 2 {
+		t.Errorf("expected success_count 2, got %d", successCount)
 	}
-	if status != "READY" {
-		t.Errorf("expected status READY, got %s", status)
+	if failureCount != 0 {
+		t.Errorf("expected failure_count 0, got %d", failureCount)
+	}
+
+	err = pool.QueryRow(ctx, `
+		SELECT status FROM task_runs
+		WHERE result_id = $1
+	`, callbackID).Scan(&callbackStatus)
+	if err != nil {
+		t.Fatalf("failed to read callback status after second completion: %v", err)
+	}
+	if callbackStatus != "READY" {
+		t.Errorf("expected callback status READY, got %s", callbackStatus)
 	}
 }
 
