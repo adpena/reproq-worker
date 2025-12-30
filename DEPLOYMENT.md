@@ -14,7 +14,7 @@ Example filenames:
 - `reproq-windows-amd64.exe`
 
 ## 2. Automated Build Script
-A `scripts/build_releases.sh` should be created to automate cross-compilation:
+Use the existing `scripts/build_releases.sh` to automate cross-compilation:
 
 ```bash
 #!/bin/bash
@@ -32,7 +32,7 @@ do
     fi
 
     echo "Building $output_name..."
-    env GOOS=$GOOS GOARCH=$GOARCH go build -o "dist/$output_name" ./cmd/reproq
+    env GO111MODULE=on GOOS=$GOOS GOARCH=$GOARCH go build -tags prod -o "dist/$output_name" ./cmd/reproq
 done
 ```
 
@@ -44,10 +44,6 @@ The `.github/workflows/release.yml` should be implemented to:
 
 ## 4. Database Migrations
 If you manage the schema directly from this repo, apply the SQL migrations in order.
-
-For legacy installs that used array columns for worker metadata, run:
-`migrations/000013_convert_worker_arrays_to_jsonb.up.sql` to convert
-`task_runs.worker_ids` and `reproq_workers.queues` to JSONB.
 
 ## 5. Production Supervision
 The preferred method for managing Reproq in production is using **systemd**.
@@ -61,3 +57,19 @@ python manage.py reproq systemd
 
 ### Manual Setup
 If you prefer to write your own unit files...
+
+## 6. Metrics/Health Hardening Runbook
+Use this checklist when exposing `/metrics` or `/healthz` in production.
+
+1. Bind to localhost or a private interface:
+   - `--metrics-addr 127.0.0.1:9090`
+2. Require bearer auth on the endpoint:
+   - `METRICS_AUTH_TOKEN=...` or `--metrics-auth-token ...`
+3. Restrict access by IP or CIDR when possible:
+   - `METRICS_ALLOW_CIDRS=127.0.0.1/32,10.0.0.0/8`
+4. Keep unauthorized rate limiting enabled:
+   - Defaults are `--metrics-auth-limit 30` and `--metrics-auth-window 1m`.
+5. If public access is required, front with a reverse proxy:
+   - Enforce TLS and IP allow-lists at the proxy/ingress.
+6. Validate the endpoint from the intended network only:
+   - `curl -H "Authorization: Bearer <token>" http://127.0.0.1:9090/healthz`

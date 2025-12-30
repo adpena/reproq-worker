@@ -10,6 +10,7 @@ type TaskStatus string
 const (
 	StatusReady      TaskStatus = "READY"
 	StatusRunning    TaskStatus = "RUNNING"
+	StatusWaiting    TaskStatus = "WAITING"
 	StatusSuccessful TaskStatus = "SUCCESSFUL"
 	StatusFailed     TaskStatus = "FAILED"
 )
@@ -40,6 +41,8 @@ type TaskRun struct {
 	LogsURI         *string         `db:"logs_uri"`
 	ArtifactsURI    *string         `db:"artifacts_uri"`
 	ExpiresAt       *time.Time      `db:"expires_at"`
+	LastError       *string         `db:"last_error"`
+	FailedAt        *time.Time      `db:"failed_at"`
 	CreatedAt       time.Time       `db:"created_at"`
 	UpdatedAt       time.Time       `db:"updated_at"`
 	CancelRequested bool            `db:"cancel_requested"`

@@ -17,9 +17,10 @@ do
     fi
 
     echo "🏗️ Building for $GOOS/$GOARCH..."
+    export GO111MODULE=on
     export GOOS=$GOOS
     export GOARCH=$GOARCH
-    go build -o "dist/$output_name" ./cmd/reproq
+    go build -tags prod -o "dist/$output_name" ./cmd/reproq
 done
 
 echo "✅ All binaries built in dist/"

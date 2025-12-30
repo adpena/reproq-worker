@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -10,14 +12,20 @@ import (
 )
 
 type Server struct {
-	pool *pgxpool.Pool
-	addr string
+	pool    *pgxpool.Pool
+	addr    string
+	token   string
+	limiter *authLimiter
+	allow   *CIDRAllowlist
 }
 
-func NewServer(pool *pgxpool.Pool, addr string) *Server {
+func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist) *Server {
 	return &Server{
-		pool: pool,
-		addr: addr,
+		pool:    pool,
+		addr:    addr,
+		token:   token,
+		limiter: newAuthLimiter(authLimit, authWindow, authMaxEntries),
+		allow:   allowlist,
 	}
 }
 
@@ -26,10 +34,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Health check
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorize(w, r) {
+			return
+		}
 		// Ping DB as a basic readiness check
 		if err := s.pool.Ping(r.Context()); err != nil {
+			slog.Warn("Health check failed", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("unhealthy: " + err.Error()))
+			w.Write([]byte("unhealthy"))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -37,11 +53,25 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 
 	// Prometheus metrics
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorize(w, r) {
+			return
+		}
+		promhttp.Handler().ServeHTTP(w, r)
+	})
 
 	server := &http.Server{
-		Addr:    s.addr,
-		Handler: mux,
+		Addr:              s.addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {
@@ -52,4 +82,65 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	return server.ListenAndServe()
+}
+
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
+	host := remoteHost(r.RemoteAddr)
+	if s.allow != nil && !s.allow.Allows(host) {
+		limited := false
+		if s.limiter != nil && !s.limiter.allow(host, time.Now()) {
+			limited = true
+		}
+		slog.Warn(
+			"Denied request",
+			"path", r.URL.Path,
+			"method", r.Method,
+			"remote_addr", r.RemoteAddr,
+			"remote_host", host,
+			"reason", "allowlist",
+			"rate_limited", limited,
+		)
+		if limited {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("rate limited"))
+		} else {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("forbidden"))
+		}
+		return false
+	}
+	if s.token == "" {
+		return true
+	}
+	if r.Header.Get("Authorization") != "Bearer "+s.token {
+		limited := false
+		if s.limiter != nil && !s.limiter.allow(host, time.Now()) {
+			limited = true
+		}
+		slog.Warn(
+			"Unauthorized request",
+			"path", r.URL.Path,
+			"method", r.Method,
+			"remote_addr", r.RemoteAddr,
+			"remote_host", host,
+			"rate_limited", limited,
+		)
+		if limited {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte("rate limited"))
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("unauthorized"))
+		}
+		return false
+	}
+	return true
+}
+
+func remoteHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }

@@ -213,6 +213,8 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 		SET status = 'SUCCESSFUL',
 		    finished_at = NOW(),
 		    return_json = $1,
+		    last_error = NULL,
+		    failed_at = NULL,
 		    leased_until = NULL,
 		    leased_by = NULL,
 		    updated_at = NOW()
@@ -307,12 +309,15 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 		status = StatusReady
 	}
 
+	lastError := summarizeError(errorObj)
 	query := `
 		UPDATE task_runs
 		SET status = $1,
 		    finished_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    errors_json = errors_json || $2::jsonb,
-		    run_after = $3,
+		    run_after = CASE WHEN $1 = 'FAILED' THEN NULL ELSE $3 END,
+		    last_error = CASE WHEN $1 = 'FAILED' THEN $6 ELSE NULL END,
+		    failed_at = CASE WHEN $1 = 'FAILED' THEN NOW() ELSE NULL END,
 		    leased_until = NULL,
 		    leased_by = NULL,
 		    updated_at = NOW()
@@ -324,7 +329,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 	}
 	defer tx.Rollback(ctx)
 
-	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID)
+	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID, lastError)
 	if err != nil {
 		return err
 	}
@@ -374,6 +379,8 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 						'failed_result_id', $2,
 						'at', NOW()
 					),
+				    last_error = 'workflow_failed: Workflow failed due to task failure',
+				    failed_at = NOW(),
 				    run_after = NULL,
 				    wait_count = 0,
 				    updated_at = NOW()
@@ -390,6 +397,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 
 // Reclaim recovers tasks with expired leases.
 func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+	lastError := "lease_expiry: Worker heartbeat lost or process crashed"
 	query := `
 		WITH expired AS (
 			SELECT result_id FROM task_runs
@@ -398,18 +406,21 @@ func (s *Service) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, e
 		)
 		UPDATE task_runs
 		SET status = CASE WHEN attempts < COALESCE(max_attempts, $1) THEN 'READY' ELSE 'FAILED' END,
+		    finished_at = CASE WHEN attempts < COALESCE(max_attempts, $1) THEN NULL ELSE NOW() END,
 		    errors_json = errors_json || jsonb_build_object(
 				'kind', 'lease_expiry',
 				'message', 'Worker heartbeat lost or process crashed',
 				'at', NOW()
 			),
+		    last_error = CASE WHEN attempts < COALESCE(max_attempts, $1) THEN NULL ELSE $2 END,
+		    failed_at = CASE WHEN attempts < COALESCE(max_attempts, $1) THEN NULL ELSE NOW() END,
 		    leased_until = NULL,
 		    leased_by = NULL,
 		    updated_at = NOW()
 		FROM expired
 		WHERE task_runs.result_id = expired.result_id
 	`
-	tag, err := s.pool.Exec(ctx, query, maxAttemptsDefault)
+	tag, err := s.pool.Exec(ctx, query, maxAttemptsDefault, lastError)
 	if err != nil {
 		return 0, err
 	}

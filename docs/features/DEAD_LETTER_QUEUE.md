@@ -9,11 +9,26 @@ When tasks exhaust all retries, they are marked as `FAILED`. Currently, there is
 - Add a `last_error` column for quick summary inspection.
 
 ## Implementation Checklist
-- [ ] Migration: Add `last_error` and `failed_at` columns.
-- [ ] CLI: Implement `reproq triage list`.
-- [ ] CLI: Implement `reproq triage inspect <id>`.
-- [ ] CLI: Implement `reproq triage retry <id|--all>`.
-- [ ] Logic: Ensure retried tasks get a fresh `attempt_count`.
+- [x] Migration: Add `last_error` and `failed_at` columns.
+- [x] CLI: Implement `reproq triage list`.
+- [x] CLI: Implement `reproq triage inspect <id>`.
+- [x] CLI: Implement `reproq triage retry <id|--all>`.
+- [x] Logic: Ensure retried tasks get a fresh `attempt_count`.
+
+## Usage
+```bash
+# List failed tasks
+./reproq triage list --dsn "postgres://..." --limit 50
+
+# Inspect a failed task
+./reproq triage inspect --dsn "postgres://..." --id 12345
+
+# Retry a failed task
+./reproq triage retry --dsn "postgres://..." --id 12345
+
+# Retry all failed tasks
+./reproq triage retry --dsn "postgres://..." --all
+```
 
 ## References
 - Inspired by Celery's Flower and Sidekiq's Retries/Dead tabs.

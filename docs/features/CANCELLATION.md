@@ -13,6 +13,15 @@ Operators need to stop a long-running task immediately without killing the entir
 - [x] CLI: Implement `reproq cancel --id <task_id>`.
 - [x] Logic: Update `internal/runner.runHeartbeat` to check the flag and trigger cancellation.
 
+## Usage
+```bash
+./reproq cancel --dsn "postgres://..." --id 12345
+```
+
+Notes:
+- Cancellation is only honored for `RUNNING` tasks.
+- The worker checks `cancel_requested` during heartbeats and cancels the subprocess.
+
 ## References
 - Kubernetes `terminationGracePeriod`.
 - Celery `revoke(terminate=True)`.

@@ -5,13 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"reproq-worker/internal/config"
 	"reproq-worker/internal/db"
@@ -19,9 +20,10 @@ import (
 	"reproq-worker/internal/logging"
 	"reproq-worker/internal/queue"
 	"reproq-worker/internal/runner"
+	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.112"
+const Version = "0.0.123"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -43,6 +45,10 @@ func main() {
 		runReplay(os.Args[2:])
 	case "limit":
 		runLimit(os.Args[2:])
+	case "cancel":
+		runCancel(os.Args[2:])
+	case "triage":
+		runTriage(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -50,12 +56,42 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: reproq <worker|beat|replay|limit|version> [args]")
+	fmt.Println("usage: reproq <worker|beat|replay|limit|cancel|triage|version> [args]")
 }
 
 func runWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	metricsPort := fs.Int("metrics-port", 0, "Port to serve Prometheus metrics (0 to disable)")
+	metricsAddr := fs.String("metrics-addr", os.Getenv("METRICS_ADDR"), "Address to serve health/metrics (overrides --metrics-port)")
+	metricsToken := fs.String("metrics-auth-token", os.Getenv("METRICS_AUTH_TOKEN"), "Bearer token required for /metrics and /healthz")
+	metricsAllowCIDRs := fs.String("metrics-allow-cidrs", os.Getenv("METRICS_ALLOW_CIDRS"), "Comma-separated IP/CIDR allow-list for /metrics and /healthz")
+	authLimit := web.DefaultAuthLimit
+	if val := os.Getenv("METRICS_AUTH_LIMIT"); val != "" {
+		parsed, err := strconv.Atoi(val)
+		if err != nil || parsed <= 0 {
+			log.Fatal("Invalid METRICS_AUTH_LIMIT (must be a positive integer)")
+		}
+		authLimit = parsed
+	}
+	authWindow := web.DefaultAuthWindow
+	if val := os.Getenv("METRICS_AUTH_WINDOW"); val != "" {
+		parsed, err := time.ParseDuration(val)
+		if err != nil || parsed <= 0 {
+			log.Fatal("Invalid METRICS_AUTH_WINDOW (must be a positive duration, e.g. 1m)")
+		}
+		authWindow = parsed
+	}
+	authMaxEntries := web.DefaultAuthMaxEntries
+	if val := os.Getenv("METRICS_AUTH_MAX_ENTRIES"); val != "" {
+		parsed, err := strconv.Atoi(val)
+		if err != nil || parsed <= 0 {
+			log.Fatal("Invalid METRICS_AUTH_MAX_ENTRIES (must be a positive integer)")
+		}
+		authMaxEntries = parsed
+	}
+	metricsAuthLimit := fs.Int("metrics-auth-limit", authLimit, "Unauthorized request limit per window")
+	metricsAuthWindow := fs.Duration("metrics-auth-window", authWindow, "Window for unauthorized request rate limiting")
+	metricsAuthMaxEntries := fs.Int("metrics-auth-max-entries", authMaxEntries, "Max tracked hosts for auth rate limiting")
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
@@ -63,17 +99,20 @@ func runWorker(args []string) {
 	cfg.BindFlags(fs)
 	fs.Parse(args)
 
-	if *metricsPort > 0 {
-		go func() {
-			fmt.Printf("📊 Serving Prometheus metrics on :%d/metrics\n", *metricsPort)
-			http.Handle("/metrics", promhttp.Handler())
-			if err := http.ListenAndServe(fmt.Sprintf(":%d", *metricsPort), nil); err != nil {
-				log.Printf("Metrics server error: %v", err)
-			}
-		}()
+	if cfg.DatabaseURL == "" {
+		log.Fatal("DSN required (use --dsn or DATABASE_URL)")
 	}
 
+	cfg.Version = Version
+
 	logger := logging.Init(cfg.WorkerID)
+	if cfg.PayloadMode == "inline" {
+		if config.ProductionBuild {
+			logger.Error("Payload mode inline disabled in production builds; use stdin or file", "payload_mode", cfg.PayloadMode)
+			os.Exit(1)
+		}
+		logger.Warn("Payload mode inline exposes payload in process args; prefer stdin or file", "payload_mode", cfg.PayloadMode)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -82,6 +121,38 @@ func runWorker(args []string) {
 		log.Fatal(err)
 	}
 	defer pool.Close()
+
+	addr := ""
+	if *metricsAddr != "" {
+		addr = *metricsAddr
+	} else if *metricsPort > 0 {
+		addr = fmt.Sprintf(":%d", *metricsPort)
+	}
+	if addr != "" {
+		allowlist, err := web.ParseCIDRAllowlist(*metricsAllowCIDRs)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *metricsAuthLimit <= 0 {
+			log.Fatal("--metrics-auth-limit must be a positive integer")
+		}
+		if *metricsAuthWindow <= 0 {
+			log.Fatal("--metrics-auth-window must be a positive duration")
+		}
+		if *metricsAuthMaxEntries <= 0 {
+			log.Fatal("--metrics-auth-max-entries must be a positive integer")
+		}
+		if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil {
+			logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN", "addr", addr)
+		}
+		server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist)
+		go func() {
+			logger.Info("Serving health and metrics", "addr", addr)
+			if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
+				logger.Error("Metrics server error", "error", err)
+			}
+		}()
+	}
 
 	q := queue.NewService(pool)
 	exec := &executor.ShellExecutor{
@@ -97,6 +168,21 @@ func runWorker(args []string) {
 	if err := r.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func runBeat(args []string) {
@@ -256,5 +342,162 @@ func runLimit(args []string) {
 		fmt.Printf("Deleted %d rate limit(s) for %s\n", deleted, *key)
 	default:
 		fmt.Println("usage: reproq limit <set|ls|rm> [args]")
+	}
+}
+
+func runCancel(args []string) {
+	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
+	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	id := fs.Int64("id", 0, "Result ID to cancel")
+	fs.Parse(args)
+
+	if *dsn == "" || *id == 0 {
+		log.Fatal("DSN and --id required")
+	}
+
+	ctx := context.Background()
+	pool, err := db.NewPool(ctx, *dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pool.Close()
+
+	q := queue.NewService(pool)
+	updated, err := q.RequestCancel(ctx, *id)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if updated == 0 {
+		fmt.Printf("No RUNNING task found for result_id %d\n", *id)
+		return
+	}
+	fmt.Printf("Cancellation requested for task %d\n", *id)
+}
+
+func runTriage(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: reproq triage <list|inspect|retry> [args]")
+		return
+	}
+
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("triage list", flag.ExitOnError)
+		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		limit := fs.Int("limit", 50, "Max tasks to list")
+		queueName := fs.String("queue", "", "Filter by queue name")
+		fs.Parse(args[1:])
+
+		if *dsn == "" {
+			log.Fatal("DSN required")
+		}
+
+		ctx := context.Background()
+		pool, err := db.NewPool(ctx, *dsn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer pool.Close()
+
+		q := queue.NewService(pool)
+		items, err := q.ListFailedTasks(ctx, *limit, *queueName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(items) == 0 {
+			fmt.Println("No failed tasks.")
+			return
+		}
+		fmt.Println("ID\tQueue\tTask\tAttempts\tFailedAt\tLastError")
+		for _, item := range items {
+			failedAt := ""
+			if item.FailedAt != nil {
+				failedAt = item.FailedAt.Format(time.RFC3339)
+			}
+			lastError := ""
+			if item.LastError != nil {
+				lastError = *item.LastError
+			}
+			fmt.Printf("%d\t%s\t%s\t%d/%d\t%s\t%s\n", item.ResultID, item.QueueName, item.TaskPath, item.Attempts, item.MaxAttempts, failedAt, lastError)
+		}
+	case "inspect":
+		fs := flag.NewFlagSet("triage inspect", flag.ExitOnError)
+		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		id := fs.Int64("id", 0, "Result ID to inspect")
+		fs.Parse(args[1:])
+
+		if *dsn == "" || *id == 0 {
+			log.Fatal("DSN and --id required")
+		}
+
+		ctx := context.Background()
+		pool, err := db.NewPool(ctx, *dsn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer pool.Close()
+
+		q := queue.NewService(pool)
+		item, err := q.InspectFailedTask(ctx, *id)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		failedAt := ""
+		if item.FailedAt != nil {
+			failedAt = item.FailedAt.Format(time.RFC3339)
+		}
+		lastError := ""
+		if item.LastError != nil {
+			lastError = *item.LastError
+		}
+
+		fmt.Printf("Result ID: %d\n", item.ResultID)
+		fmt.Printf("Queue: %s\n", item.QueueName)
+		fmt.Printf("Task Path: %s\n", item.TaskPath)
+		fmt.Printf("Status: %s\n", item.Status)
+		fmt.Printf("Attempts: %d/%d\n", item.Attempts, item.MaxAttempts)
+		fmt.Printf("Failed At: %s\n", failedAt)
+		fmt.Printf("Last Error: %s\n", lastError)
+		fmt.Printf("Spec JSON: %s\n", string(item.SpecJSON))
+		fmt.Printf("Errors JSON: %s\n", string(item.ErrorsJSON))
+	case "retry":
+		fs := flag.NewFlagSet("triage retry", flag.ExitOnError)
+		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		id := fs.Int64("id", 0, "Result ID to retry")
+		all := fs.Bool("all", false, "Retry all failed tasks")
+		fs.Parse(args[1:])
+
+		if *dsn == "" {
+			log.Fatal("DSN required")
+		}
+		if *id == 0 && !*all {
+			log.Fatal("Provide --id or --all")
+		}
+
+		ctx := context.Background()
+		pool, err := db.NewPool(ctx, *dsn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer pool.Close()
+
+		q := queue.NewService(pool)
+		var updated int64
+		if *all {
+			updated, err = q.RetryAllFailedTasks(ctx)
+		} else {
+			updated, err = q.RetryFailedTask(ctx, *id)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		if updated == 0 {
+			fmt.Println("No failed tasks updated.")
+			return
+		}
+		fmt.Printf("Retried %d task(s)\n", updated)
+	default:
+		fmt.Println("usage: reproq triage <list|inspect|retry> [args]")
 	}
 }

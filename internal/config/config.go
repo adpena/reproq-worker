@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,11 @@ type Config struct {
 
 	WorkerID string
 
+	Version string
+
 	QueueNames []string
+
+	AllowedTaskModules []string
 
 	MaxConcurrency int
 
@@ -57,6 +62,10 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&c.WorkerID, "worker-id", c.WorkerID, "Unique worker ID")
 
+	fs.Var(&stringSliceFlag{target: &c.QueueNames, parser: parseQueueList}, "queues", "Comma-separated queue names")
+
+	fs.Var(&stringSliceFlag{target: &c.AllowedTaskModules, parser: parseCommaList}, "allowed-task-modules", "Comma-separated allowed task module prefixes")
+
 	fs.IntVar(&c.MaxConcurrency, "concurrency", c.MaxConcurrency, "Max concurrent tasks")
 
 	fs.IntVar(&c.LeaseSeconds, "lease-seconds", c.LeaseSeconds, "Lease duration")
@@ -74,12 +83,6 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 func Load() (*Config, error) {
 
 	dbURL := os.Getenv("DATABASE_URL")
-
-	if dbURL == "" {
-
-		return nil, fmt.Errorf("DATABASE_URL required")
-
-	}
 
 	workerID := os.Getenv("WORKER_ID")
 
@@ -108,13 +111,25 @@ func Load() (*Config, error) {
 		priorityAgingFactor = parsed
 	}
 
+	queueNames := []string{"default"}
+	if val := os.Getenv("QUEUE_NAMES"); val != "" {
+		queueNames = parseQueueList(val)
+	}
+
+	allowedModules := []string{}
+	if val := os.Getenv("ALLOWED_TASK_MODULES"); val != "" {
+		allowedModules = parseCommaList(val)
+	}
+
 	c := &Config{
 
 		DatabaseURL: dbURL,
 
 		WorkerID: workerID,
 
-		QueueNames: []string{"default"},
+		QueueNames: queueNames,
+
+		AllowedTaskModules: allowedModules,
 
 		MaxConcurrency: 10,
 
@@ -153,4 +168,48 @@ func Load() (*Config, error) {
 
 	return c, nil
 
+}
+
+type stringSliceFlag struct {
+	target *[]string
+	parser func(string) []string
+}
+
+func (s *stringSliceFlag) String() string {
+	if s == nil || s.target == nil {
+		return ""
+	}
+	return strings.Join(*s.target, ",")
+}
+
+func (s *stringSliceFlag) Set(val string) error {
+	if s.parser != nil {
+		*s.target = s.parser(val)
+	} else {
+		*s.target = parseCommaList(val)
+	}
+	return nil
+}
+
+func parseCommaList(input string) []string {
+	parts := strings.Split(input, ",")
+	queues := make([]string, 0, len(parts))
+	for _, part := range parts {
+		queue := strings.TrimSpace(part)
+		if queue != "" {
+			queues = append(queues, queue)
+		}
+	}
+	if len(queues) == 0 {
+		return []string{}
+	}
+	return queues
+}
+
+func parseQueueList(input string) []string {
+	queues := parseCommaList(input)
+	if len(queues) == 0 {
+		return []string{"default"}
+	}
+	return queues
 }

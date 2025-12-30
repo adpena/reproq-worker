@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -494,5 +495,149 @@ func TestWorkerRegistration(t *testing.T) {
 	err = s.UpdateWorkerHeartbeat(ctx, "w1")
 	if err != nil {
 		t.Errorf("failed to update heartbeat: %v", err)
+	}
+}
+
+func TestRequestCancel(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	specHash := "cancelhash" + strings.Repeat("0", 54)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
+		VALUES ($1, 'default', '{}', 'READY', NOW())
+	`, specHash)
+	if err != nil {
+		t.Fatalf("failed to insert task: %v", err)
+	}
+
+	task, err := s.Claim(ctx, "w-cancel-1", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("failed to claim task: %v", err)
+	}
+
+	updated, err := s.RequestCancel(ctx, task.ResultID)
+	if err != nil {
+		t.Fatalf("request cancel failed: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("expected 1 row updated, got %d", updated)
+	}
+
+	var cancelRequested bool
+	err = pool.QueryRow(ctx, "SELECT cancel_requested FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&cancelRequested)
+	if err != nil {
+		t.Fatalf("failed to read cancel_requested: %v", err)
+	}
+	if !cancelRequested {
+		t.Fatal("expected cancel_requested to be true")
+	}
+
+	updated, err = s.RequestCancel(ctx, task.ResultID+9999)
+	if err != nil {
+		t.Fatalf("request cancel on missing task failed: %v", err)
+	}
+	if updated != 0 {
+		t.Fatalf("expected 0 rows updated, got %d", updated)
+	}
+}
+
+func TestTriageLifecycle(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	specHash := "triagehash" + strings.Repeat("1", 54)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.triage","args":[]}', 'READY', NOW(), 1)
+	`, specHash)
+	if err != nil {
+		t.Fatalf("failed to insert task: %v", err)
+	}
+
+	task, err := s.Claim(ctx, "w-triage-1", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("failed to claim task: %v", err)
+	}
+
+	err = s.CompleteFailure(ctx, task.ResultID, "w-triage-1", json.RawMessage(`{"message":"boom"}`), false, time.Now())
+	if err != nil {
+		t.Fatalf("failed to complete failure: %v", err)
+	}
+
+	items, err := s.ListFailedTasks(ctx, 10, "default")
+	if err != nil {
+		t.Fatalf("list failed tasks: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(items))
+	}
+	if items[0].LastError == nil || *items[0].LastError != "boom" {
+		t.Fatalf("expected last_error boom, got %v", items[0].LastError)
+	}
+	if items[0].FailedAt == nil {
+		t.Fatal("expected failed_at to be set")
+	}
+
+	detail, err := s.InspectFailedTask(ctx, task.ResultID)
+	if err != nil {
+		t.Fatalf("inspect failed task: %v", err)
+	}
+	if len(detail.SpecJSON) == 0 || len(detail.ErrorsJSON) == 0 {
+		t.Fatal("expected spec_json and errors_json to be populated")
+	}
+
+	updated, err := s.RetryFailedTask(ctx, task.ResultID)
+	if err != nil {
+		t.Fatalf("retry failed task: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("expected 1 task retried, got %d", updated)
+	}
+
+	var status string
+	var attempts int
+	var lastError sql.NullString
+	var failedAt sql.NullTime
+	err = pool.QueryRow(ctx, `
+		SELECT status, attempts, last_error, failed_at
+		FROM task_runs
+		WHERE result_id = $1
+	`, task.ResultID).Scan(&status, &attempts, &lastError, &failedAt)
+	if err != nil {
+		t.Fatalf("read retried task: %v", err)
+	}
+	if status != "READY" {
+		t.Fatalf("expected status READY, got %s", status)
+	}
+	if attempts != 0 {
+		t.Fatalf("expected attempts reset to 0, got %d", attempts)
+	}
+	if lastError.Valid || failedAt.Valid {
+		t.Fatalf("expected last_error and failed_at to be cleared, got %v %v", lastError, failedAt)
 	}
 }

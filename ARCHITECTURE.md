@@ -7,14 +7,16 @@ The project follows a standard Go project layout, optimized for a single-binary 
 ```text
 /
 ├── cmd/
-│   └── reproq/           # Unified CLI entry point (worker, beat, replay).
+│   ├── reproq/           # Unified CLI entry point (worker, beat, replay).
+│   └── torture/          # Load test helper binary (not a reproq subcommand).
 ├── internal/
 │   ├── config/           # Configuration management (env vars, defaults).
 │   ├── db/               # Database connection pool.
 │   ├── queue/            # Queue operations (Claim, Heartbeat, Complete, Periodic).
 │   ├── executor/         # External process execution (Python).
 │   ├── runner/           # Worker orchestration loop and heartbeat management.
-│   └── logging/          # Structured logging setup (slog).
+│   ├── logging/          # Structured logging setup (slog).
+│   └── web/              # Health/metrics HTTP server (present, not wired by default).
 ├── migrations/           # SQL migration files.
 ├── go.mod
 ├── go.sum
@@ -52,7 +54,7 @@ Invokes the Django task executor:
 The central queue table.
 *   `result_id`: BIGSERIAL primary key.
 *   `spec_hash`: SHA256 of the task specification. Used for deduplication.
-*   `status`: Enum (`READY`, `RUNNING`, `SUCCESSFUL`, `FAILED`).
+*   `status`: Enum (`READY`, `RUNNING`, `WAITING`, `SUCCESSFUL`, `FAILED`).
 *   `run_after`: Scheduling timestamp.
 *   `leased_until`/`leased_by`: Concurrency control and heartbeat tracking.
 *   `worker_ids`: JSON array of worker IDs that have claimed the task.
@@ -61,6 +63,9 @@ The central queue table.
 Stores cron-based task definitions.
 *   `cron_expr`: Standard cron syntax.
 *   `next_run_at`: Next scheduled execution time.
+
+### `workflow_runs`
+Tracks group/chord workflow state and callback readiness.
 
 ### `reproq_workers`
 Registry of active worker nodes. Used for monitoring and telemetry in the Django Admin.

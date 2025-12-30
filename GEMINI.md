@@ -17,20 +17,23 @@ The project follows a modular Go structure:
 - `internal/runner`: Orchestration layer that manages the worker lifecycle, heartbeats, and graceful shutdowns.
 - `internal/executor`: Abstraction for executing tasks, including a security validator and a mock mode for benchmarking.
 - `internal/config`: Centralized configuration management via environment variables and CLI flags.
+- `internal/db`: Postgres connection pool configuration and health checks.
+- `internal/logging`: Structured logging setup (slog).
+- `internal/web`: HTTP health/metrics server (present, not wired by default).
 
 ## Building and Running
 
 ### Key Commands
 - **Build**: `go build -o reproq ./cmd/reproq`
 - **Run Worker**: `./reproq worker --dsn "postgres://..."`
-- **Triage Failures**: `./reproq triage list`
-- **Schedule Task**: `./reproq schedule --name "job" --cron "* * * * *" --task "path"`
 - **Start Scheduler**: `./reproq beat`
+- **Replay Task**: `./reproq replay --dsn "postgres://..." --id 123`
 - **Set Rate Limit**: `./reproq limit set --key "global" --rate 10`
-- **Cancel Task**: `./reproq cancel --id 123`
-- **Verification**: `./reproq verify --dsn "postgres://..."`
-- **Torture Test**: `./reproq torture --dsn "postgres://..."`
-- **Load Testing**: `./reproq loadgen --tasks 10000`
+- **Version**: `./reproq --version`
+
+### Torture Tool (Separate Binary)
+- **Run**: `go run ./cmd/torture --dsn "postgres://..." --count 1000`
+- **Build**: `go build -o reproq-torture ./cmd/torture`
 
 ### Development & Testing
 Automated via `Makefile`:
@@ -50,10 +53,15 @@ When major changes are made to the Go worker logic (internal/queue, internal/run
 go build -o reproq ./cmd/reproq
 ```
 
+### Current Behavioral Notes
+- Queue polling currently targets only the first configured queue.
+- Worker registration writes a fixed version string in `RegisterWorker`.
+- `DATABASE_URL`, `WORKER_ID`, `PRIORITY_AGING_FACTOR`, and `HEALTH_ADDR` are the only env vars read by the worker config.
+
 ## Reliability Invariants
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
-- **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `PENDING`.
+- **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `READY`.
 - **Concurrency Guard**: Dedupes via `spec_hash` checks before enqueue; a partial unique index can reinforce this in Postgres.
 
 ### Security Posture

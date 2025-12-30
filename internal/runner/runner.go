@@ -25,29 +25,42 @@ var (
 )
 
 type Runner struct {
-	cfg      *config.Config
-	queue    *queue.Service
-	executor executor.IExecutor
-	logger   *slog.Logger
-	wg       sync.WaitGroup
-	pool     chan struct{} // Concurrency limiter
+	cfg       *config.Config
+	queue     QueueService
+	executor  executor.IExecutor
+	validator *executor.Validator
+	logger    *slog.Logger
+	wg        sync.WaitGroup
+	pool      chan struct{} // Concurrency limiter
+	queueIdx  int
 }
 
-func New(cfg *config.Config, q *queue.Service, exec executor.IExecutor, logger *slog.Logger) *Runner {
+type QueueService interface {
+	RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error
+	Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error)
+	UpdateWorkerHeartbeat(ctx context.Context, id string) error
+	Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error)
+	Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error)
+	CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage) error
+	CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time) error
+}
+
+func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *slog.Logger) *Runner {
 	return &Runner{
-		cfg:      cfg,
-		queue:    q,
-		executor: exec,
-		logger:   logger,
-		pool:     make(chan struct{}, cfg.MaxConcurrency),
+		cfg:       cfg,
+		queue:     q,
+		executor:  exec,
+		validator: executor.NewValidator(cfg.AllowedTaskModules),
+		logger:    logger,
+		pool:      make(chan struct{}, cfg.MaxConcurrency),
 	}
 }
 
 func (r *Runner) Start(ctx context.Context) error {
-	r.logger.Info("Starting reproq worker", "concurrency", r.cfg.MaxConcurrency)
+	r.logger.Info("Starting reproq worker", "concurrency", r.cfg.MaxConcurrency, "queues", r.cfg.QueueNames)
 
 	hostname, _ := os.Hostname()
-	if err := r.queue.RegisterWorker(ctx, r.cfg.WorkerID, hostname, r.cfg.MaxConcurrency, r.cfg.QueueNames, "0.1.0"); err != nil {
+	if err := r.queue.RegisterWorker(ctx, r.cfg.WorkerID, hostname, r.cfg.MaxConcurrency, r.cfg.QueueNames, r.cfg.Version); err != nil {
 		r.logger.Warn("Failed to register worker", "error", err)
 	}
 
@@ -121,14 +134,38 @@ func (r *Runner) Start(ctx context.Context) error {
 }
 
 func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {
-	// For MVP, just poll the first queue. Future: round-robin r.cfg.QueueNames
-	return r.queue.Claim(
-		ctx,
-		r.cfg.WorkerID,
-		r.cfg.QueueNames[0],
-		r.cfg.LeaseSeconds,
-		r.cfg.PriorityAgingFactor,
-	)
+	if len(r.cfg.QueueNames) == 0 {
+		return nil, errors.New("no queues configured")
+	}
+
+	start := r.queueIdx % len(r.cfg.QueueNames)
+	for i := 0; i < len(r.cfg.QueueNames); i++ {
+		idx := (start + i) % len(r.cfg.QueueNames)
+		queueName := r.cfg.QueueNames[idx]
+		claimStart := time.Now()
+		task, err := r.queue.Claim(
+			ctx,
+			r.cfg.WorkerID,
+			queueName,
+			r.cfg.LeaseSeconds,
+			r.cfg.PriorityAgingFactor,
+		)
+		claimDuration.WithLabelValues(queueName).Observe(time.Since(claimStart).Seconds())
+		if err == nil {
+			r.queueIdx = (idx + 1) % len(r.cfg.QueueNames)
+			tasksClaimed.WithLabelValues(queueName).Inc()
+			if !task.EnqueuedAt.IsZero() {
+				queueWaitTime.WithLabelValues(queueName).Observe(time.Since(task.EnqueuedAt).Seconds())
+			}
+			return task, nil
+		}
+		if !errors.Is(err, queue.ErrNoTasks) {
+			return nil, err
+		}
+	}
+
+	r.queueIdx = (start + 1) % len(r.cfg.QueueNames)
+	return nil, queue.ErrNoTasks
 }
 
 func (r *Runner) sleep(ctx context.Context) {
@@ -146,7 +183,28 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 	}()
 
 	logger := r.logger.With("result_id", task.ResultID, "spec_hash", task.SpecHash)
-	logger.Info("Executing task")
+
+	specTaskPath, err := r.extractTaskPath(task.SpecJSON)
+	if err != nil {
+		logger.Error("Invalid task spec", "error", err)
+		completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer compCancel()
+		r.failTask(completionCtx, task, err, "invalid_spec", "", false)
+		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
+		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		return
+	}
+	if err := r.validator.Validate(specTaskPath); err != nil {
+		logger.Warn("Task rejected by validator", "task_path", specTaskPath, "error", err)
+		completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer compCancel()
+		r.failTask(completionCtx, task, err, "security_violation", specTaskPath, false)
+		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
+		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		return
+	}
+
+	logger.Info("Executing task", "task_path", specTaskPath)
 
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -177,7 +235,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		}()
 	}
 
+	execStart := time.Now()
 	env, _, _, err := r.executor.Execute(execCtx, task.ResultID, task.Attempts, task.SpecJSON, r.cfg.ExecTimeout)
+	execDuration.WithLabelValues(task.QueueName).Observe(time.Since(execStart).Seconds())
 
 	completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer compCancel()
@@ -191,16 +251,19 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":      time.Now(),
 		})
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second))
+		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		return
 	}
 
 	if env.Ok {
 		logger.Info("Task successful")
 		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
+		tasksCompleted.WithLabelValues(task.QueueName, "success").Inc()
 		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return)
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
+		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		errObj, _ := json.Marshal(map[string]interface{}{
 			"kind":            "app_error",
 			"exception_class": env.ExceptionClass,
@@ -229,4 +292,35 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun)
 	}
+}
+
+type taskSpec struct {
+	TaskPath string `json:"task_path"`
+}
+
+func (r *Runner) extractTaskPath(specJSON json.RawMessage) (string, error) {
+	if len(specJSON) == 0 {
+		return "", errors.New("spec_json is empty")
+	}
+	var spec taskSpec
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		return "", err
+	}
+	if spec.TaskPath == "" {
+		return "", errors.New("spec_json missing task_path")
+	}
+	return spec.TaskPath, nil
+}
+
+func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, kind string, taskPath string, shouldRetry bool) {
+	payload := map[string]interface{}{
+		"kind":    kind,
+		"message": err.Error(),
+		"at":      time.Now(),
+	}
+	if taskPath != "" {
+		payload["task_path"] = taskPath
+	}
+	errObj, _ := json.Marshal(payload)
+	_ = r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now())
 }

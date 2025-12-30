@@ -76,6 +76,8 @@ python manage.py reproq worker</pre>
                 
                 <h4 class="font-bold mt-4">Manual Install (Go)</h4>
                 <pre>go build -o reproq ./cmd/reproq</pre>
+                <p class="text-sm text-slate-600 mt-2">For production builds, use the <code>prod</code> tag to disable inline payload mode.</p>
+                <pre>go build -tags prod -o reproq ./cmd/reproq</pre>
 
                 <h4 class="font-bold mt-4">Cross-Platform Binaries</h4>
                 <p>Download from the <a href="https://github.com/adpena/reproq-worker/releases" class="text-emerald-600">Releases page</a>. Binaries follow the pattern <code>reproq-{os}-{arch}</code>.</p>
@@ -96,6 +98,17 @@ python manage.py reproq worker</pre>
                 <h3 class="text-xl font-bold mt-8">replay</h3>
                 <p>Re-enqueues a task.</p>
                 <pre>./reproq replay --id 12345</pre>
+
+                <h3 class="text-xl font-bold mt-8">cancel</h3>
+                <p>Request cancellation of a running task.</p>
+                <pre>./reproq cancel --id 12345</pre>
+
+                <h3 class="text-xl font-bold mt-8">triage</h3>
+                <p>List, inspect, and retry failed tasks.</p>
+                <pre>./reproq triage list --limit 50
+./reproq triage inspect --id 12345
+./reproq triage retry --id 12345
+./reproq triage retry --all</pre>
 
                 <h3 class="text-xl font-bold mt-8">limit</h3>
                 <p>Manage rate limits (token buckets) in Postgres.</p>
@@ -151,13 +164,18 @@ python manage.py reproq worker</pre>
 
             <section id="metrics" class="mb-16 prose prose-slate max-w-none">
                 <h2 class="text-3xl font-bold mb-6">Prometheus Monitoring</h2>
-                <p>Enable the built-in metrics exporter to monitor throughput and error rates.</p>
+                <p>Enable the built-in metrics exporter to monitor throughput and error rates. The same port also exposes <code>/healthz</code> for readiness checks.</p>
                 <pre># Start with metrics enabled
 ./reproq worker --metrics-port 9090</pre>
+                <p>For security, bind to localhost (e.g., <code>--metrics-addr 127.0.0.1:9090</code>) or set <code>METRICS_AUTH_TOKEN</code> to require a bearer token.</p>
+                <p>Restrict access by IP/CIDR with <code>METRICS_ALLOW_CIDRS</code> (for example <code>127.0.0.1/32,10.0.0.0/8</code>).</p>
+                <p>Unauthorized requests are rate-limited (defaults: 30/min per remote host). Adjust via <code>--metrics-auth-limit</code> and <code>--metrics-auth-window</code>.</p>
                 <p>Exposed metrics include:</p>
                 <ul>
                     <li><code>reproq_tasks_processed_total</code>: Counter of tasks by queue and status.</li>
-                    <li><code>reproq_task_duration_seconds</code>: Histogram of execution times.</li>
+                    <li><code>reproq_tasks_claimed_total</code> / <code>reproq_tasks_completed_total</code>: Claim and completion counts.</li>
+                    <li><code>reproq_claim_duration_seconds</code> / <code>reproq_exec_duration_seconds</code>: Claim and execution timings.</li>
+                    <li><code>reproq_queue_wait_duration_seconds</code>: Time spent waiting in queue.</li>
                     <li>Standard Go runtime metrics (goroutines, heap, etc).</li>
                 </ul>
             </section>
