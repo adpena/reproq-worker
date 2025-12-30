@@ -22,6 +22,7 @@ DATABASE_URL
 reproq
 reproq-*
 bin/
+.gocache/
 
 # IDEs
 .idea/

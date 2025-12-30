@@ -659,7 +659,7 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 	pool.Exec(ctx, "DELETE FROM task_runs")
 	s := NewService(pool)
 
-	specHash := "logshash" + strings.Repeat("2", 57)
+	specHash := "logshash" + strings.Repeat("2", 56)
 	var resultID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
@@ -707,7 +707,7 @@ func TestReplayBySpecHash(t *testing.T) {
 	pool.Exec(ctx, "DELETE FROM task_runs")
 	s := NewService(pool)
 
-	specHash := "replayhash" + strings.Repeat("3", 55)
+	specHash := "replayhash" + strings.Repeat("3", 54)
 	var firstID int64
 	var secondID int64
 	err = pool.QueryRow(ctx, `
