@@ -52,6 +52,11 @@ Invokes the Django task executor:
 *   **Protocol**: Communicates via `stdin` (JSON payload) and `stdout` (JSON result).
 *   **Isolation**: Tasks run in a separate process, protected by the worker's timeout and resource limits.
 
+### Executor Contract
+The worker sends a canonical spec JSON to `python -m reproq_django.executor` and expects a JSON result envelope.
+For the exact schema, error payloads, and `logs_uri` semantics, see:
+https://github.com/adpena/reproq-django/blob/main/docs/payloads.md
+
 ## 3. SQL Schema
 
 ### `task_runs`

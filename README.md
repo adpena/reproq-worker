@@ -21,6 +21,18 @@ python manage.py reproq worker
 
 ---
 
+## ✅ Compatibility
+
+| Component | Supported |
+| :--- | :--- |
+| Django | 6.x via `reproq-django` |
+| Python (executor env) | 3.12+ |
+| Reproq Django | Latest release (install/upgrade via `python manage.py reproq install` or `upgrade`) |
+
+Keep the worker and reproq-django releases aligned; use `python manage.py reproq doctor` to verify the binary, schema, and DSN.
+
+---
+
 ## ✅ Why Reproq (vs Celery, RQ, Huey)
 
 - **No extra broker**: Postgres only; no Redis/RabbitMQ to operate.
@@ -137,7 +149,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 | Flag | Env Var | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--config` | `REPROQ_CONFIG` | - | Path to a YAML/TOML config file. |
-| `--dsn` | `DATABASE_URL` | - | **Required**. PostgreSQL connection string. |
+| `--dsn` | `DATABASE_URL` | - | PostgreSQL connection string. Required unless set in `DATABASE_URL` or the config file. |
 | `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique identifier for this worker node. Used for heartbeats. |
 | `--queues` | `QUEUE_NAMES` | `default` | Comma-separated list of queue names to poll. |
 | `--allowed-task-modules` | `ALLOWED_TASK_MODULES` | `myapp.tasks.,tasks.` | Comma-separated allow-list of task module prefixes (`*` disables validation; dev only). |
@@ -161,6 +173,7 @@ Unauthorized requests are rate-limited (defaults: 30/min per remote host).
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
 Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
 When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.
+The log file is plaintext with `STDOUT:`/`STDERR:` headers; `python manage.py reproq logs --id <result_id>` can read it.
 Structured logs redact payload and secret-like fields by key name.
 `--payload-mode inline` exposes payload data in process args; prefer `stdin` or `file` for sensitive payloads. Production builds (`-tags prod`) reject `inline`.
 Config files can also set fields that do not have CLI flags, including poll backoff, executor module, payload limits, and timeouts.
@@ -181,6 +194,16 @@ Config files can also set fields that do not have CLI flags, including poll back
 | Flag | Default | Description |
 | :--- | :--- | :--- |
 | `--interval` | `30s` | How often the scheduler checks for due periodic tasks. |
+
+---
+
+## 🔒 Security Quick Checklist
+
+- Build with `-tags prod` to disable `--payload-mode inline`.
+- Keep `/metrics` and `/healthz` private (bind to localhost or set auth + allow-list).
+- Set `ALLOWED_TASK_MODULES` to the minimal allow-list.
+- Prefer `stdin`/`file` payload modes and store secrets in a vault, not env files in source control.
+- Link: `docs/security/SECURITY_CHECKLIST.md`.
 
 ---
 
