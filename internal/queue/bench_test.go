@@ -33,7 +33,7 @@ func BenchmarkClaim(b *testing.B) {
 
 	leaseSeconds := int((5 * time.Minute) / time.Second)
 	for i := 0; i < b.N; i++ {
-		_, err := service.Claim(ctx, "bench-worker", "default", leaseSeconds)
+		_, err := service.Claim(ctx, "bench-worker", "default", leaseSeconds, 0)
 		if err != nil {
 			// If we run out of tasks, it's fine for the bench to show limits
 			if err == ErrNoTasks {

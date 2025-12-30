@@ -122,7 +122,13 @@ func (r *Runner) Start(ctx context.Context) error {
 
 func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {
 	// For MVP, just poll the first queue. Future: round-robin r.cfg.QueueNames
-	return r.queue.Claim(ctx, r.cfg.WorkerID, r.cfg.QueueNames[0], r.cfg.LeaseSeconds)
+	return r.queue.Claim(
+		ctx,
+		r.cfg.WorkerID,
+		r.cfg.QueueNames[0],
+		r.cfg.LeaseSeconds,
+		r.cfg.PriorityAgingFactor,
+	)
 }
 
 func (r *Runner) sleep(ctx context.Context) {

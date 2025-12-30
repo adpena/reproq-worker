@@ -22,50 +22,96 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 // Claim selects a READY task and transitions it to RUNNING.
-func (s *Service) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int) (*TaskRun, error) {
+func (s *Service) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*TaskRun, error) {
 	now := time.Now()
 	leasedUntil := now.Add(time.Duration(leaseSeconds) * time.Second)
 
-	query := `
-		WITH target AS (
-			SELECT result_id 
-			FROM task_runs
-			WHERE status = 'READY'
-			  AND queue_name = $1
-			  AND (run_after IS NULL OR run_after <= NOW())
-			  AND (
-				lock_key IS NULL 
-				OR NOT EXISTS (
-					SELECT 1 FROM task_runs
-					WHERE lock_key = task_runs.lock_key 
-					  AND status = 'RUNNING'
-				)
-			  )
-			ORDER BY priority DESC, enqueued_at ASC
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		)
-		UPDATE task_runs
-		SET status = 'RUNNING',
-		    started_at = COALESCE(started_at, NOW()),
-		    last_attempted_at = NOW(),
-		    attempts = attempts + 1,
-		    leased_until = $2,
-		    leased_by = $3::text,
-		    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3::text),
-		    updated_at = NOW()
-		FROM target
-		WHERE task_runs.result_id = target.result_id
-		RETURNING 
-			task_runs.result_id, backend_alias, queue_name, priority, run_after,
-			spec_json, spec_hash, status, enqueued_at, started_at,
-			last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
-			lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
-			logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
-	`
+	query := ""
+	var args []interface{}
+	if priorityAgingFactor > 0 {
+		query = `
+			WITH target AS (
+				SELECT result_id
+				FROM task_runs
+				WHERE status = 'READY'
+				  AND queue_name = $1
+				  AND (run_after IS NULL OR run_after <= NOW())
+				  AND (
+					lock_key IS NULL
+					OR NOT EXISTS (
+						SELECT 1 FROM task_runs
+						WHERE lock_key = task_runs.lock_key
+						  AND status = 'RUNNING'
+					)
+				  )
+				ORDER BY
+					(priority + (GREATEST(EXTRACT(EPOCH FROM (NOW() - enqueued_at)), 0) / $2)) DESC,
+					enqueued_at ASC
+				LIMIT 1
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE task_runs
+			SET status = 'RUNNING',
+			    started_at = COALESCE(started_at, NOW()),
+			    last_attempted_at = NOW(),
+			    attempts = attempts + 1,
+			    leased_until = $3,
+			    leased_by = $4::text,
+			    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($4::text),
+			    updated_at = NOW()
+			FROM target
+			WHERE task_runs.result_id = target.result_id
+			RETURNING
+				task_runs.result_id, backend_alias, queue_name, priority, run_after,
+				spec_json, spec_hash, status, enqueued_at, started_at,
+				last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
+				lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
+				logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
+		`
+		args = []interface{}{queueName, priorityAgingFactor, leasedUntil, workerID}
+	} else {
+		query = `
+			WITH target AS (
+				SELECT result_id 
+				FROM task_runs
+				WHERE status = 'READY'
+				  AND queue_name = $1
+				  AND (run_after IS NULL OR run_after <= NOW())
+				  AND (
+					lock_key IS NULL 
+					OR NOT EXISTS (
+						SELECT 1 FROM task_runs
+						WHERE lock_key = task_runs.lock_key 
+						  AND status = 'RUNNING'
+					)
+				  )
+				ORDER BY priority DESC, enqueued_at ASC
+				LIMIT 1
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE task_runs
+			SET status = 'RUNNING',
+			    started_at = COALESCE(started_at, NOW()),
+			    last_attempted_at = NOW(),
+			    attempts = attempts + 1,
+			    leased_until = $2,
+			    leased_by = $3::text,
+			    worker_ids = COALESCE(worker_ids, '[]'::jsonb) || jsonb_build_array($3::text),
+			    updated_at = NOW()
+			FROM target
+			WHERE task_runs.result_id = target.result_id
+			RETURNING 
+				task_runs.result_id, backend_alias, queue_name, priority, run_after,
+				spec_json, spec_hash, status, enqueued_at, started_at,
+				last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
+				lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
+				logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
+		`
+		args = []interface{}{queueName, leasedUntil, workerID}
+	}
 
 	var t TaskRun
-	err := s.pool.QueryRow(ctx, query, queueName, leasedUntil, workerID).Scan(
+	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&t.ResultID, &t.BackendAlias, &t.QueueName, &t.Priority, &t.RunAfter,
 		&t.SpecJSON, &t.SpecHash, &t.Status, &t.EnqueuedAt, &t.StartedAt,
 		&t.LastAttemptedAt, &t.FinishedAt, &t.Attempts, &t.MaxAttempts, &t.TimeoutSeconds,

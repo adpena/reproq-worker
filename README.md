@@ -91,6 +91,7 @@ The worker is configured via CLI flags. Environment variables are also supported
 | `--heartbeat-seconds` | `60` | Frequency at which the worker updates the lease for running tasks. |
 | `--reclaim-interval-seconds` | `60` | Frequency at which the worker checks for and resets expired leases (zombie tasks). Set to `0` to disable. |
 | `--payload-mode` | `stdin` | How the payload is passed to the Python process (`stdin`, `file`, `inline`). |
+| `--priority-aging-factor` | `60` | Seconds of waiting per priority point (0 disables aging). |
 
 ### Beat Tuning
 | Flag | Default | Description |
@@ -115,7 +116,7 @@ The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 
 ## 🚧 Feature Status
 
-- **Dynamic Priority (Aging)**: Configuration exists, but the worker does not yet apply priority aging in the claim query.
+- **Dynamic Priority (Aging)**: Implemented. The worker applies priority aging in the claim query based on `PRIORITY_AGING_FACTOR`.
 - **Rate Limiting**: The schema supports a `rate_limits` table, but enforcement logic is not implemented yet. The worker does not respect token buckets during claiming.
 - **Workflows**: Chains are supported via the Django library. The worker handles dependency resolution (`parent_id`), but group/chord callbacks are not implemented yet.
 

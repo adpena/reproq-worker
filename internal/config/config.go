@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -66,6 +67,8 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&c.PayloadMode, "payload-mode", c.PayloadMode, "Payload mode: stdin|file|inline")
 
+	fs.Float64Var(&c.PriorityAgingFactor, "priority-aging-factor", c.PriorityAgingFactor, "Seconds of waiting per priority point (0 to disable)")
+
 }
 
 func Load() (*Config, error) {
@@ -94,6 +97,15 @@ func Load() (*Config, error) {
 
 		healthAddr = ":8080"
 
+	}
+
+	priorityAgingFactor := 60.0
+	if val := os.Getenv("PRIORITY_AGING_FACTOR"); val != "" {
+		parsed, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PRIORITY_AGING_FACTOR: %w", err)
+		}
+		priorityAgingFactor = parsed
 	}
 
 	c := &Config{
@@ -136,7 +148,7 @@ func Load() (*Config, error) {
 
 		HealthAddr: healthAddr,
 
-		PriorityAgingFactor: 60.0,
+		PriorityAgingFactor: priorityAgingFactor,
 	}
 
 	return c, nil

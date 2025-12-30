@@ -45,7 +45,7 @@ func TestQueueIntegration(t *testing.T) {
 
 	// 2. Claim Task
 	workerID := "test-worker-1"
-	task, err := s.Claim(ctx, workerID, "default", 300)
+	task, err := s.Claim(ctx, workerID, "default", 300, 0)
 	if err != nil {
 		t.Fatalf("failed to claim: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestRetryLifecycle(t *testing.T) {
 	}
 
 	// Claim and Fail (Attempt 1)
-	task, err := s.Claim(ctx, "w1", "default", 60)
+	task, err := s.Claim(ctx, "w1", "default", 60, 0)
 	if err != nil {
 		t.Fatalf("failed to claim task for retry: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRetryLifecycle(t *testing.T) {
 	}
 
 	// Claim and Fail (Attempt 2 - exhausted)
-	task, err = s.Claim(ctx, "w2", "default", 60)
+	task, err = s.Claim(ctx, "w2", "default", 60, 0)
 	if err != nil {
 		t.Fatalf("failed to claim retry task attempt 2: %v", err)
 	}
@@ -139,6 +139,80 @@ func TestRetryLifecycle(t *testing.T) {
 	pool.QueryRow(ctx, "SELECT status FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&status)
 	if status != "FAILED" {
 		t.Errorf("expected FAILED after exhaustion, got %s", status)
+	}
+}
+
+func TestPriorityAgingClaim(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	s := NewService(pool)
+
+	// Case 1: Aging disabled, higher priority wins.
+	var highID int64
+	var lowID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), 10, NOW())
+		RETURNING result_id
+	`, "aging_high"+strings.Repeat("1", 54)).Scan(&highID)
+	if err != nil {
+		t.Fatalf("failed to enqueue high priority task: %v", err)
+	}
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		RETURNING result_id
+	`, "aging_low"+strings.Repeat("2", 55)).Scan(&lowID)
+	if err != nil {
+		t.Fatalf("failed to enqueue low priority task: %v", err)
+	}
+
+	task, err := s.Claim(ctx, "w-aging-1", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("failed to claim without aging: %v", err)
+	}
+	if task.ResultID != highID {
+		t.Errorf("expected high priority task %d, got %d", highID, task.ResultID)
+	}
+
+	// Cleanup for aging-enabled case.
+	pool.Exec(ctx, "DELETE FROM task_runs")
+
+	// Case 2: Aging enabled, older low-priority wins.
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), 10, NOW())
+		RETURNING result_id
+	`, "aging_high2"+strings.Repeat("3", 53)).Scan(&highID)
+	if err != nil {
+		t.Fatalf("failed to enqueue high priority task: %v", err)
+	}
+	err = pool.QueryRow(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES ($1, 'default', '{}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		RETURNING result_id
+	`, "aging_low2"+strings.Repeat("4", 54)).Scan(&lowID)
+	if err != nil {
+		t.Fatalf("failed to enqueue low priority task: %v", err)
+	}
+
+	task, err = s.Claim(ctx, "w-aging-2", "default", 60, 10)
+	if err != nil {
+		t.Fatalf("failed to claim with aging: %v", err)
+	}
+	if task.ResultID != lowID {
+		t.Errorf("expected aged low priority task %d, got %d", lowID, task.ResultID)
 	}
 }
 

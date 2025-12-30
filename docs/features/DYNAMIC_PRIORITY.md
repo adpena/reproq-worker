@@ -1,9 +1,7 @@
-# Feature: Dynamic Priority (Planned)
+# Feature: Dynamic Priority (Implemented)
 
 ## Status
-🚧 **Under Construction** 🚧
-
-Configuration options exist (`PriorityAgingFactor`), but the `Claim` query does not yet implement the aging formula.
+✅ **Implemented**
 
 ## Problem Statement
 High-priority tasks can "starve" low-priority ones if the high-priority queue is never empty. Conversely, some tasks should gain priority as they wait longer.
@@ -17,8 +15,21 @@ This is a classic fairness problem in schedulers (see Linux CFS, Sidekiq weighte
 This makes low-priority tasks "bubble up" over time without removing priority control.
 
 ## Implementation Plan
-- [ ] Logic: Update the `ORDER BY` clause in `internal/queue/Service.Claim`.
+- [x] Logic: Update the `ORDER BY` clause in `internal/queue/Service.Claim`.
 - [x] Config: Add `PRIORITY_AGING_FACTOR` to `config.go`.
+
+## Configuration
+Set `PRIORITY_AGING_FACTOR` (seconds per priority point) or pass `--priority-aging-factor`. Smaller values age faster.
+
+Example:
+```
+PRIORITY_AGING_FACTOR=60
+```
+
+Effective priority is computed as:
+```
+priority + (age_seconds / PRIORITY_AGING_FACTOR)
+```
 
 ## Why It Matters
 - **Fairness**: Prevents low-priority jobs from never running.

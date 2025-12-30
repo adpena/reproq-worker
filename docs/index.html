@@ -112,6 +112,16 @@ python manage.py reproq worker</pre>
                     </div>
 
                     <div class="flex gap-4 p-6 bg-slate-100 rounded-2xl">
+                        <div class="flex-shrink-0 w-12 h-12 bg-amber-500 rounded-xl flex items-center justify-center text-white">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3M12 4a8 8 0 100 16 8 8 0 000-16z"></path></svg>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-slate-900">Priority Aging</h4>
+                            <p class="text-sm text-slate-600">Dynamic priority prevents low-priority tasks from starving. Older tasks gain effective priority based on <code>PRIORITY_AGING_FACTOR</code>.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-4 p-6 bg-slate-100 rounded-2xl">
                         <div class="flex-shrink-0 w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
                         </div>
