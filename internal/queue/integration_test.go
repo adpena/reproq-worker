@@ -357,7 +357,9 @@ func TestWorkflowChordRelease(t *testing.T) {
 
 	err = pool.QueryRow(ctx, `
 		SELECT wait_count, status FROM task_runs
-		WHERE workflow_id = $1 AND parent_id IS NULL
+		WHERE workflow_id = $1
+		  AND parent_id IS NULL
+		  AND status IN ('READY', 'WAITING')
 	`, workflowID).Scan(&waitCount, &status)
 	if err != nil {
 		t.Fatalf("failed to read callback after second completion: %v", err)
