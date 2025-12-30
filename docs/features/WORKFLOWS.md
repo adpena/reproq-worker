@@ -22,6 +22,7 @@ Complex business logic often requires tasks to run in a specific order (Chains) 
    - It decrements their `wait_count`.
    - If `wait_count` reaches 0, the dependent task transitions from `WAITING` to `READY`.
    - For chords, the worker also decrements the callback's `wait_count` based on `workflow_id`.
+   - Callbacks are only released on successful completions; failed tasks keep callbacks waiting.
 
 ## Usage
 See `reproq-django` documentation for Python API examples.
