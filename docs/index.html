@@ -25,6 +25,7 @@
             </div>
             <nav class="px-4 pb-6 space-y-1">
                 <a href="#overview" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Overview</a>
+                <a href="#why" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Why Reproq</a>
                 <a href="#installation" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Installation</a>
                 <a href="#commands" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Commands</a>
                 <a href="#features" class="block px-3 py-2 text-sm font-medium rounded-md hover:bg-slate-100 text-slate-700">Advanced Features</a>
@@ -50,9 +51,28 @@
                 </div>
             </section>
 
+            <section id="why" class="mb-16">
+                <h2 class="text-3xl font-bold mb-6">Why Reproq</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="p-4 bg-white border border-slate-200 rounded-xl">
+                        <h3 class="font-bold text-emerald-600 mb-1">Postgres Only</h3>
+                        <p class="text-sm text-slate-500">No Redis/RabbitMQ. One datastore, one worker.</p>
+                    </div>
+                    <div class="p-4 bg-white border border-slate-200 rounded-xl">
+                        <h3 class="font-bold text-emerald-600 mb-1">Self-Healing</h3>
+                        <p class="text-sm text-slate-500">Leases expire and reclaim automatically when workers die.</p>
+                    </div>
+                </div>
+                <p class="text-sm text-slate-600 mt-4">If you need complex routing or multi-broker support, Celery may still fit better. Reproq optimizes for determinism and low operational overhead.</p>
+            </section>
+
             <section id="installation" class="mb-16 prose prose-slate max-w-none">
                 <h2 class="text-3xl font-bold mb-6">Installation</h2>
                 <p>Reproq provides pre-built binaries for Linux, macOS, and Windows. You can download them manually or use the Django helper.</p>
+                <h4 class="font-bold mt-4">Quickstart (Django)</h4>
+                <pre>python manage.py reproq install
+python manage.py reproq migrate-worker
+python manage.py reproq worker</pre>
                 
                 <h4 class="font-bold mt-4">Manual Install (Go)</h4>
                 <pre>go build -o reproq ./cmd/reproq</pre>
@@ -86,8 +106,8 @@
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                         </div>
                         <div>
-                            <h4 class="font-bold text-slate-900">Global Rate Limiting</h4>
-                            <p class="text-sm text-slate-600">Protect external APIs with distributed rate limiting. Configure limits globally or per-task type via the CLI or database.</p>
+                            <h4 class="font-bold text-slate-900">Global Rate Limiting (Planned)</h4>
+                            <p class="text-sm text-slate-600">Schema support exists, but enforcement is not implemented yet. The worker does not currently apply token buckets during claiming.</p>
                         </div>
                     </div>
 

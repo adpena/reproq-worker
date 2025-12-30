@@ -9,31 +9,34 @@ Reproq Worker is a production-grade, deterministic background task runner. It wo
 
 ---
 
-## 🤝 Relationship with Reproq Django
+## ⚡ Quickstart (with Django)
 
-Reproq is split into two specialized components:
-1. **[Reproq Django](https://github.com/adpena/reproq-django)**: The "Brain." Handles the Python-side API, task definitions, and the monitoring UI.
-2. **Reproq Worker (this repo)**: The "Muscle." A standalone Go binary that polls PostgreSQL and executes tasks in isolated processes.
+If you're using Reproq Django, the easiest path is:
+
+```bash
+python manage.py reproq install
+python manage.py reproq migrate-worker
+python manage.py reproq worker
+```
 
 ---
 
-## Features
+## ✅ Why Reproq (vs Celery, RQ, Huey)
 
-- **High Concurrency**: Efficient Go implementation with goroutines and `SKIP LOCKED` support.
-- **Beat Scheduler**: Built-in cron scheduler for periodic tasks.
-- **Heartbeat & Leases**: Robust task claiming that prevents double execution even if a worker crashes.
-- **Deterministic**: SHA256-based task deduplication.
-- **Self-Registering**: Workers register themselves in the database for real-time monitoring.
+- **No extra broker**: Postgres only; no Redis/RabbitMQ to operate.
+- **Deterministic dedupe**: Identical tasks are coalesced via spec hashing.
+- **Operationally lean**: One worker binary, predictable schema.
+
+If you need complex routing, multi-broker support, or a large existing Celery ecosystem, Celery may still be the better fit. Reproq optimizes for low overhead and determinism.
 
 ---
 
 ## 🚀 Installation
 
-The recommended way to install the worker is via the Django management command:
+The recommended way to install the worker is via the Django management command, which handles versioning and platform detection:
 ```bash
 python manage.py reproq install
 ```
-This will download the pre-built binary for your OS/Architecture.
 
 Alternatively, build from source:
 ```bash
@@ -42,33 +45,27 @@ go build -o reproq ./cmd/reproq
 
 ---
 
-## 🗃 Database Schema Notes
-
-Reproq Worker expects these JSONB-backed columns:
-- `task_runs.worker_ids`: JSON array of worker IDs.
-- `reproq_workers.queues`: JSON array of queue names.
-
-If you previously ran the legacy SQL migrations that created array columns, apply
-`migrations/000013_convert_worker_arrays_to_jsonb.up.sql` to convert them.
-
----
-
 ## 🛠 Usage
 
-### Start a Worker
-Processes tasks from the queue.
+The `reproq` binary supports several subcommands.
+
+### `worker`
+Starts the task processing daemon. It polls the database for `READY` tasks and executes them.
+
 ```bash
-./reproq worker --dsn "postgres://user:pass@localhost:5432/db" --concurrency 20
+./reproq worker --dsn "postgres://..." --concurrency 20
 ```
 
-### Start the Beat Scheduler
-Schedules periodic tasks. Only one instance of `beat` should be running per database.
+### `beat`
+Starts the periodic task scheduler. **Run only one instance per database.**
+
 ```bash
-./reproq beat --dsn "postgres://user:pass@localhost:5432/db" --interval 30s
+./reproq beat --dsn "postgres://..." --interval 30s
 ```
 
-### Replay a Task
-Re-enqueues a task for execution.
+### `replay`
+Manually re-enqueues a specific task result ID.
+
 ```bash
 ./reproq replay --dsn "..." --id 12345
 ```
@@ -77,53 +74,68 @@ Re-enqueues a task for execution.
 
 ## ⚙️ Configuration
 
+The worker is configured via CLI flags. Environment variables are also supported for some options.
+
+### General Flags
 | Flag | Env Var | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--dsn` | `DATABASE_URL` | - | PostgreSQL connection string. |
-| `--concurrency` | - | `10` | Max simultaneous tasks. |
-| `--interval` | - | `30s` | Polling interval for `beat`. |
-| `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique ID for this worker node. |
+| `--dsn` | `DATABASE_URL` | - | **Required**. PostgreSQL connection string. |
+| `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique identifier for this worker node. Used for heartbeats. |
+| `--metrics-port` | - | `0` (Disabled) | Port to serve Prometheus metrics (e.g., `9090`). |
+
+### Worker Tuning
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--concurrency` | `10` | Maximum number of concurrent tasks to execute. |
+| `--lease-seconds` | `300` | Duration of the lease acquired on a task. Worker must heartbeat before this expires. |
+| `--heartbeat-seconds` | `60` | Frequency at which the worker updates the lease for running tasks. |
+| `--reclaim-interval-seconds` | `60` | Frequency at which the worker checks for and resets expired leases (zombie tasks). Set to `0` to disable. |
+| `--payload-mode` | `stdin` | How the payload is passed to the Python process (`stdin`, `file`, `inline`). |
+
+### Beat Tuning
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--interval` | `30s` | How often the scheduler checks for due periodic tasks. |
+
+---
+
+## 🧠 Core Concepts
+
+### Claiming Strategy
+The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
+1. **Priority**: High priority tasks are claimed first.
+2. **FIFO**: Among equal priority, older tasks (`enqueued_at`) are claimed first.
+3. **Concurrency Control**: It respects `lock_key`. If a task with `lock_key="A"` is `RUNNING`, no other task with `lock_key="A"` will be claimed.
+
+### Heartbeats & Recovery
+- **Heartbeat**: While a task runs, the worker updates its `leased_until` timestamp every `heartbeat-seconds`.
+- **Reclaim**: If a worker crashes, its tasks will eventually expire (`leased_until < NOW`). Another worker (the "reclaimer") will detect this and reset the task status to `READY` (if attempts remain) or `FAILED`.
+
+---
+
+## 🚧 Feature Status
+
+- **Dynamic Priority (Aging)**: Configuration exists, but the worker does not yet apply priority aging in the claim query.
+- **Rate Limiting**: The schema supports a `rate_limits` table, but enforcement logic is not implemented yet. The worker does not respect token buckets during claiming.
+- **Workflows**: Chains are supported via the Django library. The worker handles dependency resolution (`parent_id`), but group/chord callbacks are not implemented yet.
 
 ---
 
 ## 🧪 Development & Testing
 
-Reproq Worker includes a comprehensive test suite covering unit tests, integration tests, and benchmarks.
-
 ### Run Unit Tests
-Covers the executor, security validator, and mock mode.
 ```bash
 make test
 ```
-*Alternatively: `go test ./internal/executor/... ./internal/runner/...`*
 
 ### Run Integration Tests
-Requires a running PostgreSQL instance (or uses Docker if configured). These tests verify the full lifecycle of task claiming, heartbeats, and terminal state updates.
+Requires a running PostgreSQL instance. These tests verify the full lifecycle: claim -> execute -> complete.
 ```bash
 make test-integration
 ```
 
-### Performance Benchmarks
-Test the throughput of the Postgres queue claiming logic.
-```bash
-go test -bench . ./internal/queue
-```
-
 ### Torture Test
-A specialized command to stress-test the worker under high concurrency and database contention.
+A specialized command to stress-test the worker under high concurrency.
 ```bash
-./reproq torture --dsn $DATABASE_URL --concurrency 50 --duration 5m
+./reproq torture --dsn $DATABASE_URL --concurrency 50
 ```
-
-## 🤝 Contributing & Feedback
-
-We welcome contributions of all kinds!
-
-- **Core Logic**: Improvements to the Go polling, heartbeat, or scheduler.
-- **Performance**: Optimizations for PostgreSQL queries or process execution.
-- **Portability**: Support for more OS/Architecture targets.
-
-Please open an issue to discuss major changes before submitting a PR. We value your feedback on the worker's performance and stability.
-
-## 📜 License
-MIT
