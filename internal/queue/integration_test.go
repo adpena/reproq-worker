@@ -246,7 +246,7 @@ func TestRateLimitingClaim(t *testing.T) {
 	// No tokens available -> claim should skip.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO rate_limits (key, tokens_per_second, burst_size, current_tokens, last_refilled_at)
-		VALUES ('queue:default', 0, 1, 0, NOW())
+		VALUES ('queue:default', 1, 1, 0, NOW())
 	`)
 	if err != nil {
 		t.Fatalf("failed to insert rate limit: %v", err)

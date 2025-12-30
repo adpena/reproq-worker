@@ -30,6 +30,10 @@ reproq limit ls
 reproq limit rm --key queue:default
 ```
 
+## Default Behavior
+By default, global rate limiting is disabled. To enable throttling, set a positive `tokens_per_second` for `global`, a queue, or a task.
+Use `--rate 0` or delete the row to disable a limit.
+
 ## Why It Matters
 - **API protection**: Prevents thundering herds against rate-limited providers.
 - **Cost control**: Avoids surges that trigger billing spikes.

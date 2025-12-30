@@ -54,6 +54,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 				SELECT rl.*
 				FROM rate_limits rl
 				WHERE EXISTS (SELECT 1 FROM candidate)
+				  AND rl.tokens_per_second > 0
+				  AND rl.burst_size > 0
 				  AND rl.key = COALESCE(
 					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
 					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),
@@ -116,6 +118,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 				SELECT rl.*
 				FROM rate_limits rl
 				WHERE EXISTS (SELECT 1 FROM candidate)
+				  AND rl.tokens_per_second > 0
+				  AND rl.burst_size > 0
 				  AND rl.key = COALESCE(
 					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
 					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),

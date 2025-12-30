@@ -83,6 +83,7 @@ Manage rate limits in the database.
 # Remove a limit
 ./reproq limit rm --key queue:default
 ```
+Defaults: global rate limiting is disabled until you set a positive rate.
 
 ---
 
