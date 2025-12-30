@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -213,6 +214,74 @@ func TestPriorityAgingClaim(t *testing.T) {
 	}
 	if task.ResultID != lowID {
 		t.Errorf("expected aged low priority task %d, got %d", lowID, task.ResultID)
+	}
+}
+
+func TestRateLimitingClaim(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	pool.Exec(ctx, "DELETE FROM rate_limits")
+	s := NewService(pool)
+
+	specJSON := `{"task_path":"myapp.tasks.rate","args":[],"kwargs":{}}`
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES ($1, 'default', $2, 'READY', NOW(), 0, NOW())
+	`, "rate_limit"+strings.Repeat("5", 54), specJSON)
+	if err != nil {
+		t.Fatalf("failed to enqueue task: %v", err)
+	}
+
+	// No tokens available -> claim should skip.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO rate_limits (key, tokens_per_second, burst_size, current_tokens, last_refilled_at)
+		VALUES ('queue:default', 0, 1, 0, NOW())
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert rate limit: %v", err)
+	}
+
+	task, err := s.Claim(ctx, "w-rate-1", "default", 60, 0)
+	if err == nil || task != nil {
+		t.Fatalf("expected rate limit to block claim, got task=%v err=%v", task, err)
+	}
+	if !errors.Is(err, ErrNoTasks) {
+		t.Fatalf("expected ErrNoTasks due to rate limit, got %v", err)
+	}
+
+	// Add a token -> claim should succeed.
+	_, err = pool.Exec(ctx, `
+		UPDATE rate_limits
+		SET current_tokens = 1, last_refilled_at = NOW()
+		WHERE key = 'queue:default'
+	`)
+	if err != nil {
+		t.Fatalf("failed to update rate limit: %v", err)
+	}
+
+	task, err = s.Claim(ctx, "w-rate-2", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("expected claim to succeed, got %v", err)
+	}
+
+	var tokens float64
+	err = pool.QueryRow(ctx, "SELECT current_tokens FROM rate_limits WHERE key = 'queue:default'").Scan(&tokens)
+	if err != nil {
+		t.Fatalf("failed to read tokens: %v", err)
+	}
+	if tokens != 0 {
+		t.Errorf("expected tokens to decrement to 0, got %v", tokens)
 	}
 }
 

@@ -30,8 +30,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 	var args []interface{}
 	if priorityAgingFactor > 0 {
 		query = `
-			WITH target AS (
-				SELECT result_id
+			WITH candidate AS (
+				SELECT result_id, spec_json
 				FROM task_runs
 				WHERE status = 'READY'
 				  AND queue_name = $1
@@ -49,6 +49,29 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 					enqueued_at ASC
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED
+			),
+			limit_choice AS (
+				SELECT rl.*
+				FROM rate_limits rl
+				WHERE EXISTS (SELECT 1 FROM candidate)
+				  AND rl.key = COALESCE(
+					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
+					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),
+					(SELECT key FROM rate_limits WHERE key = 'global')
+				  )
+			),
+			updated_limit AS (
+				UPDATE rate_limits
+				SET current_tokens = LEAST(burst_size, current_tokens + (EXTRACT(EPOCH FROM (NOW() - last_refilled_at)) * tokens_per_second)) - 1,
+				    last_refilled_at = NOW()
+				WHERE key = (SELECT key FROM limit_choice)
+				  AND LEAST(burst_size, current_tokens + (EXTRACT(EPOCH FROM (NOW() - last_refilled_at)) * tokens_per_second)) >= 1
+				RETURNING key
+			),
+			target AS (
+				SELECT result_id FROM candidate
+				WHERE NOT EXISTS (SELECT 1 FROM limit_choice)
+				   OR EXISTS (SELECT 1 FROM updated_limit)
 			)
 			UPDATE task_runs
 			SET status = 'RUNNING',
@@ -71,8 +94,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		args = []interface{}{queueName, priorityAgingFactor, leasedUntil, workerID}
 	} else {
 		query = `
-			WITH target AS (
-				SELECT result_id 
+			WITH candidate AS (
+				SELECT result_id, spec_json
 				FROM task_runs
 				WHERE status = 'READY'
 				  AND queue_name = $1
@@ -88,6 +111,29 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 				ORDER BY priority DESC, enqueued_at ASC
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED
+			),
+			limit_choice AS (
+				SELECT rl.*
+				FROM rate_limits rl
+				WHERE EXISTS (SELECT 1 FROM candidate)
+				  AND rl.key = COALESCE(
+					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
+					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),
+					(SELECT key FROM rate_limits WHERE key = 'global')
+				  )
+			),
+			updated_limit AS (
+				UPDATE rate_limits
+				SET current_tokens = LEAST(burst_size, current_tokens + (EXTRACT(EPOCH FROM (NOW() - last_refilled_at)) * tokens_per_second)) - 1,
+				    last_refilled_at = NOW()
+				WHERE key = (SELECT key FROM limit_choice)
+				  AND LEAST(burst_size, current_tokens + (EXTRACT(EPOCH FROM (NOW() - last_refilled_at)) * tokens_per_second)) >= 1
+				RETURNING key
+			),
+			target AS (
+				SELECT result_id FROM candidate
+				WHERE NOT EXISTS (SELECT 1 FROM limit_choice)
+				   OR EXISTS (SELECT 1 FROM updated_limit)
 			)
 			UPDATE task_runs
 			SET status = 'RUNNING',

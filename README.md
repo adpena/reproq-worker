@@ -70,6 +70,20 @@ Manually re-enqueues a specific task result ID.
 ./reproq replay --dsn "..." --id 12345
 ```
 
+### `limit`
+Manage rate limits in the database.
+
+```bash
+# Set a queue limit
+./reproq limit set --key queue:default --rate 5 --burst 10
+
+# List limits
+./reproq limit ls
+
+# Remove a limit
+./reproq limit rm --key queue:default
+```
+
 ---
 
 ## ⚙️ Configuration
@@ -117,7 +131,7 @@ The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 ## 🚧 Feature Status
 
 - **Dynamic Priority (Aging)**: Implemented. The worker applies priority aging in the claim query based on `PRIORITY_AGING_FACTOR`.
-- **Rate Limiting**: The schema supports a `rate_limits` table, but enforcement logic is not implemented yet. The worker does not respect token buckets during claiming.
+- **Rate Limiting**: Implemented. Token bucket limits are enforced during claiming via the `rate_limits` table.
 - **Workflows**: Chains are supported via the Django library. The worker handles dependency resolution (`parent_id`), but group/chord callbacks are not implemented yet.
 
 ---

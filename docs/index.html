@@ -96,6 +96,12 @@ python manage.py reproq worker</pre>
                 <h3 class="text-xl font-bold mt-8">replay</h3>
                 <p>Re-enqueues a task.</p>
                 <pre>./reproq replay --id 12345</pre>
+
+                <h3 class="text-xl font-bold mt-8">limit</h3>
+                <p>Manage rate limits (token buckets) in Postgres.</p>
+                <pre>./reproq limit set --key queue:default --rate 5 --burst 10
+./reproq limit ls
+./reproq limit rm --key queue:default</pre>
             </section>
 
             <section id="features" class="mb-16">
@@ -106,8 +112,8 @@ python manage.py reproq worker</pre>
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                         </div>
                         <div>
-                            <h4 class="font-bold text-slate-900">Global Rate Limiting (Planned)</h4>
-                            <p class="text-sm text-slate-600">Schema support exists, but enforcement is not implemented yet. The worker does not currently apply token buckets during claiming.</p>
+                            <h4 class="font-bold text-slate-900">Global Rate Limiting</h4>
+                            <p class="text-sm text-slate-600">Token bucket enforcement is built in. Configure queue or task limits via <code>reproq limit</code> or the database.</p>
                         </div>
                     </div>
 
