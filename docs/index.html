@@ -170,6 +170,16 @@ python manage.py reproq worker</pre>
                 <p class="mt-4"><strong>Note:</strong> Reproq Worker is designed to work in tandem with <a href="https://adpena.github.io/reproq-django/" class="text-emerald-600 font-bold">Reproq Django</a>, which provides the task definition and monitoring interface.</p>
             </section>
 
+            <section id="scaling" class="mb-16 prose prose-slate max-w-none">
+                <h2 class="text-3xl font-bold mb-6">Scaling: Workers vs Concurrency</h2>
+                <p>You can scale Reproq by increasing <code>--concurrency</code> or by running multiple workers.</p>
+                <ul>
+                    <li><strong>Concurrency</strong>: more goroutines in a single process; best for I/O-bound workloads with minimal overhead.</li>
+                    <li><strong>Multiple workers</strong>: separate processes or hosts; best for CPU-bound workloads and fault isolation.</li>
+                </ul>
+                <p>Rule of thumb: start with 1-2 workers per host and tune <code>--concurrency</code> to your CPU cores and workload type.</p>
+            </section>
+
             <section id="community" class="mb-16">
                 <h2 class="text-3xl font-bold mb-6">Join the Community</h2>
                 <div class="p-8 bg-emerald-50 border border-emerald-100 rounded-2xl font-sans text-emerald-900">

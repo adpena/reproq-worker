@@ -128,6 +128,23 @@ The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 
 ---
 
+## ⚖️ Scaling: Workers vs Concurrency
+
+You can scale in two ways:
+
+- **Increase concurrency** (`--concurrency`): More goroutines in a single worker process. Best for I/O-bound tasks and lower overhead (one process, shared cache).
+- **Run multiple workers**: Multiple processes (or machines). Best for CPU-bound workloads, fault isolation, and horizontal scaling.
+
+Tradeoffs:
+- **Concurrency** shares memory and can amplify one bad task (e.g., memory leak).
+- **Multiple workers** add overhead (more processes, more DB connections) but isolate failures.
+
+Rule of thumb:
+- Start with 1-2 workers per host and tune `--concurrency` to available CPU cores and workload type.
+- If you see DB or CPU saturation, add workers instead of only increasing concurrency.
+
+---
+
 ## 🚧 Feature Status
 
 - **Dynamic Priority (Aging)**: Implemented. The worker applies priority aging in the claim query based on `PRIORITY_AGING_FACTOR`.
