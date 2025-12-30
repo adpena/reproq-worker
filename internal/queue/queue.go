@@ -243,23 +243,58 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 		return fmt.Errorf("failed to trigger dependents: %w", err)
 	}
 
-	// Decrement wait_count for workflow callbacks (chords).
-	workflowTrigger := `
-		UPDATE task_runs
-		SET wait_count = wait_count - 1,
-		    status = CASE
-				WHEN wait_count - 1 <= 0 THEN 'READY'
-				ELSE 'WAITING'
-			END,
-		    updated_at = NOW()
-		WHERE workflow_id = (SELECT workflow_id FROM task_runs WHERE result_id = $1)
-		  AND parent_id IS NULL
-		  AND status = 'WAITING'
-		  AND wait_count > 0
+	// 3. Strict workflow semantics (chords).
+	workflowQuery := `
+		WITH wf AS (
+			SELECT workflow_id FROM task_runs
+			WHERE result_id = $1 AND workflow_id IS NOT NULL
+		),
+		mark_callback AS (
+			UPDATE workflow_runs
+			SET status = 'SUCCESSFUL',
+			    updated_at = NOW()
+			WHERE workflow_id = (SELECT workflow_id FROM wf)
+			  AND callback_result_id = $1
+			RETURNING workflow_id
+		),
+		mark_group AS (
+			UPDATE workflow_runs
+			SET success_count = success_count + 1,
+			    status = CASE
+					WHEN status = 'FAILED' THEN status
+					WHEN (success_count + 1) >= expected_count AND failure_count = 0 THEN 'WAITING_CALLBACK'
+					ELSE status
+				END,
+			    updated_at = NOW()
+			WHERE workflow_id = (SELECT workflow_id FROM wf)
+			  AND callback_result_id <> $1
+			  AND status <> 'FAILED'
+			RETURNING workflow_id, expected_count, success_count, failure_count, callback_result_id, status
+		)
+		SELECT expected_count, success_count, failure_count, callback_result_id, status
+		FROM mark_group
 	`
-	_, err = tx.Exec(ctx, workflowTrigger, resultID)
-	if err != nil {
-		return fmt.Errorf("failed to trigger workflow callbacks: %w", err)
+	var expectedCount int
+	var successCount int
+	var failureCount int
+	var callbackID *int64
+	var status *string
+	err = tx.QueryRow(ctx, workflowQuery, resultID).Scan(&expectedCount, &successCount, &failureCount, &callbackID, &status)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to update workflow state: %w", err)
+	}
+	if callbackID != nil && status != nil && *status == "WAITING_CALLBACK" && failureCount == 0 && successCount >= expectedCount {
+		_, err = tx.Exec(ctx, `
+			UPDATE task_runs
+			SET status = 'READY',
+			    wait_count = 0,
+			    updated_at = NOW()
+			WHERE result_id = $1
+			  AND status = 'WAITING'
+		`, *callbackID)
+		if err != nil {
+			return fmt.Errorf("failed to release workflow callback: %w", err)
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -283,12 +318,74 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 		    updated_at = NOW()
 		WHERE result_id = $4 AND leased_by = $5 AND status = 'RUNNING'
 	`
-	// errorObj should be a single object, we wrap it in a list for the append if it's not already
-	res, err := s.pool.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID)
-	if err == nil && res.RowsAffected() == 0 {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
 		return fmt.Errorf("fencing failure")
 	}
-	return err
+
+	if !shouldRetry {
+		workflowFail := `
+			WITH wf AS (
+				SELECT workflow_id FROM task_runs
+				WHERE result_id = $1 AND workflow_id IS NOT NULL
+			),
+			workflow_update AS (
+				UPDATE workflow_runs
+				SET failure_count = failure_count + 1,
+				    status = 'FAILED',
+				    updated_at = NOW()
+				WHERE workflow_id = (SELECT workflow_id FROM wf)
+				  AND callback_result_id <> $1
+				  AND status <> 'FAILED'
+				RETURNING callback_result_id
+			),
+			workflow_callback AS (
+				UPDATE workflow_runs
+				SET status = 'FAILED',
+				    updated_at = NOW()
+				WHERE workflow_id = (SELECT workflow_id FROM wf)
+				  AND callback_result_id = $1
+				RETURNING callback_result_id
+			)
+			SELECT callback_result_id FROM workflow_update
+		`
+		var callbackID *int64
+		err = tx.QueryRow(ctx, workflowFail, resultID).Scan(&callbackID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("failed to mark workflow failed: %w", err)
+		}
+		if callbackID != nil {
+			_, err = tx.Exec(ctx, `
+				UPDATE task_runs
+				SET status = 'FAILED',
+				    finished_at = NOW(),
+				    errors_json = errors_json || jsonb_build_object(
+						'kind', 'workflow_failed',
+						'message', 'Workflow failed due to task failure',
+						'failed_result_id', $2,
+						'at', NOW()
+					),
+				    run_after = NULL,
+				    wait_count = 0,
+				    updated_at = NOW()
+				WHERE result_id = $1 AND status IN ('WAITING', 'READY')
+			`, *callbackID, resultID)
+			if err != nil {
+				return fmt.Errorf("failed to fail workflow callback: %w", err)
+			}
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // Reclaim recovers tasks with expired leases.

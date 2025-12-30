@@ -21,8 +21,8 @@ Complex business logic often requires tasks to run in a specific order (Chains) 
    - When a task completes successfully (`CompleteSuccess`), the worker executes a SQL update to find any dependents (`WHERE parent_id = ?`).
    - It decrements their `wait_count`.
    - If `wait_count` reaches 0, the dependent task transitions from `WAITING` to `READY`.
-   - For chords, the worker also decrements the callback's `wait_count` based on `workflow_id`.
-   - Callbacks are only released on successful completions; failed tasks keep callbacks waiting.
+   - For chords, the worker also updates a `workflow_runs` record and releases the callback only after all group tasks succeed.
+   - If any group task fails (terminal failure), the workflow is marked failed and the callback is failed.
 
 ## Usage
 See `reproq-django` documentation for Python API examples.

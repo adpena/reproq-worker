@@ -323,12 +323,22 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Fatalf("failed to insert task 2: %v", err)
 	}
 
-	_, err = pool.Exec(ctx, `
+	var callbackID int64
+	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, wait_count)
 		VALUES ($1, 'default', '{}', 'WAITING', NOW(), $2, 2)
-	`, "wf_cb"+strings.Repeat("c", 59), workflowID)
+		RETURNING result_id
+	`, "wf_cb"+strings.Repeat("c", 59), workflowID).Scan(&callbackID)
 	if err != nil {
 		t.Fatalf("failed to insert callback task: %v", err)
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO workflow_runs (workflow_id, expected_count, success_count, failure_count, callback_result_id, status)
+		VALUES ($1, 2, 0, 0, $2, 'RUNNING')
+	`, workflowID, callbackID)
+	if err != nil {
+		t.Fatalf("failed to insert workflow run: %v", err)
 	}
 
 	if err := s.CompleteSuccess(ctx, id1, "w1", json.RawMessage(`{"ok": true}`)); err != nil {
