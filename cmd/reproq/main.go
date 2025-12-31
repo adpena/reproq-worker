@@ -26,7 +26,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.137"
+const Version = "0.0.138"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -282,7 +282,7 @@ func runWorker(args []string) {
 				logger.Error("Metrics server error", "error", err)
 			}
 		}()
-		metrics.StartCollector(ctx, pool, 2*time.Second, logger)
+		metrics.StartCollector(ctx, pool, 5*time.Second, logger)
 	}
 
 	q := queue.NewService(pool)

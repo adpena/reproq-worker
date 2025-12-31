@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultInterval = 2 * time.Second
-	queryTimeout    = 5 * time.Second
+	defaultInterval = 5 * time.Second
+	queryTimeout    = 10 * time.Second
 )
 
 var (
