@@ -39,4 +39,26 @@ var (
 		Help:    "Time spent on database operations",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"operation"})
+
+	// Worker Resource Telemetry
+	WorkerCPUUsage = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "reproq_worker_cpu_usage_percent",
+		Help: "Current CPU usage percentage of the worker process",
+	})
+
+	WorkerMemUsage = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "reproq_worker_mem_usage_bytes",
+		Help: "Current memory usage (RSS) of the worker process in bytes",
+	})
+
+	// DB Pool Telemetry
+	DBPoolConnectionsInUse = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "reproq_db_pool_connections_in_use",
+		Help: "Number of active database connections in the pool",
+	})
+
+	DBPoolWaitCount = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "reproq_db_pool_wait_count_total",
+		Help: "Total number of times a connection was requested but not immediately available",
+	})
 )

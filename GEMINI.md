@@ -44,6 +44,16 @@ Automated via `Makefile`:
 
 ## Development Conventions
 
+### Observability & Metrics
+- All core operations (DB queries, task execution, heartbeats) must be instrumented with Prometheus metrics.
+- Maintain high-resolution telemetry for system resources (CPU, Memory) and DB pool status to support deep TUI introspection.
+- Ensure the SSE event broker is performant and supports filtering by queue, task, or worker.
+
+### Testing
+- **Unit Tests**: Required for all internal logic (queue, runner, executor).
+- **Integration Tests**: Run `make test-integration` for any changes affecting the database schema or task lifecycle.
+- **Performance**: Benchmark the task claiming CTE for large queue depths to prevent TUI lag.
+
 ### Deployment & Release Requirements
 To support the automated installation via `reproq-django`, releases must include pre-built binaries following this naming convention:
 - `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)

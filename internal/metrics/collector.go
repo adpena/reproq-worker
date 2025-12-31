@@ -3,7 +3,10 @@ package metrics
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"time"
+
+	"reproq-worker/internal/runner"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -51,6 +54,9 @@ func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Durat
 			if err := collectWorkerMetrics(ctx, pool); err != nil {
 				logWarn(logger, "Worker metrics collection failed", err)
 			}
+			collectSystemMetrics()
+			collectPoolMetrics(pool)
+
 			wait := interval - time.Since(start)
 			if wait < 0 {
 				wait = 0
@@ -64,6 +70,21 @@ func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Durat
 			}
 		}
 	}()
+}
+
+func collectSystemMetrics() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	runner.WorkerMemUsage.Set(float64(m.Alloc)) // Using Alloc for simplicity, or Sys for total reserved
+}
+
+func collectPoolMetrics(pool *pgxpool.Pool) {
+	if pool == nil {
+		return
+	}
+	stat := pool.Stat()
+	runner.DBPoolConnectionsInUse.Set(float64(stat.AcquiredConns()))
+	runner.DBPoolWaitCount.Add(float64(stat.EmptyAcquireCount()))
 }
 
 func collectTaskMetrics(ctx context.Context, pool *pgxpool.Pool) error {

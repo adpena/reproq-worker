@@ -26,7 +26,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.138"
+const Version = "0.0.139"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -83,6 +83,26 @@ func defaultMetricsConfig() metricsConfig {
 		authLimit:      web.DefaultAuthLimit,
 		authWindow:     web.DefaultAuthWindow,
 		authMaxEntries: web.DefaultAuthMaxEntries,
+	}
+}
+
+func normalizeMetricsAuth(token, secret string) (string, string, bool) {
+	if token == "" && secret != "" {
+		return secret, secret, true
+	}
+	return token, secret, false
+}
+
+func isLowMemoryMode() bool {
+	return parseTruthy(os.Getenv("LOW_MEMORY_MODE"))
+}
+
+func parseTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -229,6 +249,15 @@ func runWorker(args []string) {
 	cfg.Version = Version
 
 	logger := logging.Init(cfg.WorkerID)
+	if token, secret, used := normalizeMetricsAuth(*metricsToken, *metricsSecret); used {
+		*metricsToken = token
+		*metricsSecret = secret
+		logger.Info("Using REPROQ_TUI_SECRET for metrics bearer token", "env", "REPROQ_TUI_SECRET")
+	}
+	lowMemory := isLowMemoryMode()
+	if lowMemory {
+		logger.Warn("Low memory mode enabled; metrics/health/events disabled", "env", "LOW_MEMORY_MODE")
+	}
 	if cfg.PayloadMode == "inline" {
 		if config.ProductionBuild {
 			logger.Error("Payload mode inline disabled in production builds; use stdin or file", "payload_mode", cfg.PayloadMode)
@@ -253,36 +282,40 @@ func runWorker(args []string) {
 		addr = fmt.Sprintf(":%d", *metricsPort)
 	}
 	if addr != "" {
-		broker = events.NewBroker(200)
-		allowlist, err := web.ParseCIDRAllowlist(*metricsAllowCIDRs)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if *metricsAuthLimit <= 0 {
-			log.Fatal("--metrics-auth-limit must be a positive integer")
-		}
-		if *metricsAuthWindow <= 0 {
-			log.Fatal("--metrics-auth-window must be a positive duration")
-		}
-		if *metricsAuthMaxEntries <= 0 {
-			log.Fatal("--metrics-auth-max-entries must be a positive integer")
-		}
-		tlsConfig, err := web.BuildTLSConfig(*metricsTLSCert, *metricsTLSKey, *metricsTLSClientCA)
-		if err != nil {
-			log.Fatal(err)
-		}
-		clientAuth := tlsConfig != nil && tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert
-		if *metricsToken == "" && *metricsSecret == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
-			logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN/REPROQ_TUI_SECRET", "addr", addr)
-		}
-		server := web.NewServer(pool, addr, *metricsToken, *metricsSecret, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
-		go func() {
-			logger.Info("Serving health and metrics", "addr", addr)
-			if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
-				logger.Error("Metrics server error", "error", err)
+		if lowMemory {
+			logger.Warn("Skipping metrics server due to low memory mode", "addr", addr)
+		} else {
+			broker = events.NewBroker(200)
+			allowlist, err := web.ParseCIDRAllowlist(*metricsAllowCIDRs)
+			if err != nil {
+				log.Fatal(err)
 			}
-		}()
-		metrics.StartCollector(ctx, pool, 5*time.Second, logger)
+			if *metricsAuthLimit <= 0 {
+				log.Fatal("--metrics-auth-limit must be a positive integer")
+			}
+			if *metricsAuthWindow <= 0 {
+				log.Fatal("--metrics-auth-window must be a positive duration")
+			}
+			if *metricsAuthMaxEntries <= 0 {
+				log.Fatal("--metrics-auth-max-entries must be a positive integer")
+			}
+			tlsConfig, err := web.BuildTLSConfig(*metricsTLSCert, *metricsTLSKey, *metricsTLSClientCA)
+			if err != nil {
+				log.Fatal(err)
+			}
+			clientAuth := tlsConfig != nil && tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert
+			if *metricsToken == "" && *metricsSecret == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
+				logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN/REPROQ_TUI_SECRET", "addr", addr)
+			}
+			server := web.NewServer(pool, addr, *metricsToken, *metricsSecret, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
+			go func() {
+				logger.Info("Serving health and metrics", "addr", addr)
+				if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
+					logger.Error("Metrics server error", "error", err)
+				}
+			}()
+			metrics.StartCollector(ctx, pool, 5*time.Second, logger)
+		}
 	}
 
 	q := queue.NewService(pool)

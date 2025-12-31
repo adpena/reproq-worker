@@ -169,9 +169,11 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 When `--metrics-port` or `--metrics-addr` is set, the worker serves `GET /metrics`, `GET /healthz`, and `GET /events` (SSE).
 Filter events with query params like `?queue=default&worker_id=worker-1&task_id=123`.
 Use `--metrics-addr 127.0.0.1:9090` to bind locally, or set `METRICS_AUTH_TOKEN` or `REPROQ_TUI_SECRET` to require auth.
+If `METRICS_AUTH_TOKEN` is unset, `REPROQ_TUI_SECRET` is reused as the bearer token to keep a single-secret setup.
 Set `METRICS_ALLOW_CIDRS` to restrict access by IP or CIDR (for example `127.0.0.1/32,10.0.0.0/8`).
 Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).
+Set `LOW_MEMORY_MODE=1` to skip the metrics/health/events server and the metrics collector.
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
 Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
 When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.

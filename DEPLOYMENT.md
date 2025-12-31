@@ -77,6 +77,7 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
 2. Require bearer auth on the endpoint:
    - `METRICS_AUTH_TOKEN=...` or `--metrics-auth-token ...`
    - For TUI login, set `REPROQ_TUI_SECRET=...` or `--metrics-auth-secret ...`
+   - If `METRICS_AUTH_TOKEN` is unset, the `REPROQ_TUI_SECRET` value is reused as the bearer token.
 3. Restrict access by IP or CIDR when possible:
    - `METRICS_ALLOW_CIDRS=127.0.0.1/32,10.0.0.0/8`
 4. Enable TLS (and optionally mTLS):
@@ -88,3 +89,4 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
    - Enforce TLS and IP allow-lists at the proxy/ingress.
 7. Validate the endpoint from the intended network only:
    - `curl -H "Authorization: Bearer <token>" http://127.0.0.1:9090/healthz`
+8. If you must conserve memory, set `LOW_MEMORY_MODE=1` to disable the metrics/health/events server entirely.
