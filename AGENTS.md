@@ -35,3 +35,6 @@ GOOS=windows GOARCH=amd64 go build -o reproq-windows-amd64.exe ./cmd/reproq
 - **Worker Version**: `RegisterWorker` uses the CLI `Version` constant; bump it on logic changes and keep `reproq --version` aligned.
 - **Torture Tool**: `cmd/torture` builds a separate binary and is not a `reproq` subcommand.
 - **Statuses**: Workflow logic uses `WAITING`; keep status lists and docs in sync.
+
+## Deployment Access
+- The agent has access to GitHub (`gh`) and Render CLIs and can use them for releases, CI monitoring, and deployments when requested.

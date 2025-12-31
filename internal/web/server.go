@@ -3,10 +3,14 @@ package web
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
+
+	"reproq-worker/internal/events"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -19,9 +23,10 @@ type Server struct {
 	limiter *authLimiter
 	allow   *CIDRAllowlist
 	tls     *tls.Config
+	events  *events.Broker
 }
 
-func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist, tlsConfig *tls.Config) *Server {
+func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist, tlsConfig *tls.Config, broker *events.Broker) *Server {
 	return &Server{
 		pool:    pool,
 		addr:    addr,
@@ -29,6 +34,7 @@ func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, aut
 		limiter: newAuthLimiter(authLimit, authWindow, authMaxEntries),
 		allow:   allowlist,
 		tls:     tlsConfig,
+		events:  broker,
 	}
 }
 
@@ -67,6 +73,9 @@ func (s *Server) Start(ctx context.Context) error {
 		promhttp.Handler().ServeHTTP(w, r)
 	})
 
+	// Server-sent events
+	mux.HandleFunc("/events", s.handleEvents)
+
 	server := &http.Server{
 		Addr:              s.addr,
 		Handler:           mux,
@@ -91,6 +100,82 @@ func (s *Server) Start(ctx context.Context) error {
 		return server.ListenAndServeTLS("", "")
 	}
 	return server.ListenAndServe()
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorize(w, r) {
+		return
+	}
+	if s.events == nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("events not configured"))
+		return
+	}
+	filter, err := parseEventFilter(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("streaming unsupported"))
+		return
+	}
+
+	ch, cancel, snapshot := s.events.Subscribe()
+	defer cancel()
+	for _, event := range snapshot {
+		if !filter.Matches(event) {
+			continue
+		}
+		if err := writeEvent(w, event); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event := <-ch:
+			if !filter.Matches(event) {
+				continue
+			}
+			if err := writeEvent(w, event); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-keepalive.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func writeEvent(w http.ResponseWriter, event events.Event) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", payload)
+	return err
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {

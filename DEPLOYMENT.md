@@ -70,7 +70,7 @@ python manage.py reproq systemd
 If you prefer to write your own unit files...
 
 ## 6. Metrics/Health Hardening Runbook
-Use this checklist when exposing `/metrics` or `/healthz` in production.
+Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in production.
 
 1. Bind to localhost or a private interface:
    - `--metrics-addr 127.0.0.1:9090`

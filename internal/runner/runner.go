@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"reproq-worker/internal/config"
+	"reproq-worker/internal/events"
 	"reproq-worker/internal/executor"
 	"reproq-worker/internal/queue"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +37,7 @@ type Runner struct {
 	executor  executor.IExecutor
 	validator *executor.Validator
 	logger    *slog.Logger
+	publisher events.Publisher
 	wg        sync.WaitGroup
 	pool      chan struct{} // Concurrency limiter
 	queueIdx  int
@@ -50,13 +53,17 @@ type QueueService interface {
 	CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error
 }
 
-func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *slog.Logger) *Runner {
+func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *slog.Logger, publisher events.Publisher) *Runner {
+	if publisher == nil {
+		publisher = events.NoopPublisher{}
+	}
 	return &Runner{
 		cfg:       cfg,
 		queue:     q,
 		executor:  exec,
 		validator: executor.NewValidator(cfg.AllowedTaskModules),
 		logger:    logger,
+		publisher: publisher,
 		pool:      make(chan struct{}, cfg.MaxConcurrency),
 	}
 }
@@ -212,6 +219,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			r.failTask(completionCtx, task, err, "invalid_spec", "", false)
 			tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 			tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+			r.publishEvent("error", "task_invalid", "invalid task spec", task, "", map[string]string{
+				"reason": "invalid_spec",
+			})
 			return
 		}
 	}
@@ -223,6 +233,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		r.failTask(completionCtx, task, err, "invalid_spec", "", false)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		r.publishEvent("error", "task_invalid", "task_path missing", task, "", map[string]string{
+			"reason": "missing_task_path",
+		})
 		return
 	}
 	if err := r.validator.Validate(specTaskPath); err != nil {
@@ -232,10 +245,14 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		r.failTask(completionCtx, task, err, "security_violation", specTaskPath, false)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		r.publishEvent("warn", "task_rejected", "task rejected by validator", task, specTaskPath, map[string]string{
+			"reason": "security_violation",
+		})
 		return
 	}
 
 	logger.Info("Executing task", "task_path", specTaskPath)
+	r.publishEvent("info", "task_started", "task started", task, specTaskPath, nil)
 
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -295,6 +312,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		r.publishEvent("warn", "task_cancelled", "task cancelled by request", task, specTaskPath, map[string]string{
+			"reason": "cancel_requested",
+		})
 		return
 	}
 
@@ -310,6 +330,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI)
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		r.publishEvent("error", "task_infra_error", "execution infrastructure error", task, specTaskPath, map[string]string{
+			"reason": "infra_error",
+		})
 		return
 	}
 
@@ -320,6 +343,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		completeStart := time.Now()
 		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI)
 		dbOpDuration.WithLabelValues("complete_success").Observe(time.Since(completeStart).Seconds())
+		r.publishEvent("info", "task_success", "task completed", task, specTaskPath, nil)
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
@@ -353,7 +377,51 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		completeStart := time.Now()
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI)
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
+		eventType := "task_failed"
+		level := "error"
+		message := "task failed"
+		metadata := map[string]string{
+			"exception_class": env.ExceptionClass,
+		}
+		if shouldRetry {
+			eventType = "task_retry"
+			level = "warn"
+			message = "task failed; retrying"
+			metadata["next_run"] = nextRun.Format(time.RFC3339Nano)
+		}
+		if env.Message != "" {
+			metadata["error_message"] = env.Message
+		}
+		r.publishEvent(level, eventType, message, task, specTaskPath, metadata)
 	}
+}
+
+func (r *Runner) publishEvent(level, eventType, message string, task *queue.TaskRun, taskPath string, metadata map[string]string) {
+	if r.publisher == nil || task == nil {
+		return
+	}
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
+	if taskPath != "" {
+		metadata["task_path"] = taskPath
+	}
+	if task.Attempts > 0 {
+		metadata["attempt"] = strconv.Itoa(task.Attempts)
+	}
+	if task.MaxAttempts > 0 {
+		metadata["max_attempts"] = strconv.Itoa(task.MaxAttempts)
+	}
+	r.publisher.Publish(events.Event{
+		Timestamp: time.Now(),
+		Level:     level,
+		Type:      eventType,
+		Message:   message,
+		Queue:     task.QueueName,
+		TaskID:    task.ResultID,
+		WorkerID:  r.cfg.WorkerID,
+		Metadata:  metadata,
+	})
 }
 
 type taskSpec struct {

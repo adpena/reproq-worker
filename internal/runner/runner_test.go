@@ -204,7 +204,7 @@ func TestRunnerRegistersVersion(t *testing.T) {
 
 	q := &fakeQueue{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(cfg, q, &fakeExecutor{}, logger)
+	r := New(cfg, q, &fakeExecutor{}, logger, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -236,7 +236,7 @@ func TestPollRoundRobin(t *testing.T) {
 		},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(cfg, q, &fakeExecutor{}, logger)
+	r := New(cfg, q, &fakeExecutor{}, logger, nil)
 
 	ctx := context.Background()
 	task, err := r.poll(ctx)
@@ -280,7 +280,7 @@ func TestRunnerRejectsUnauthorizedTask(t *testing.T) {
 	q := &validationQueue{}
 	exec := &recordingExecutor{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(cfg, q, exec, logger)
+	r := New(cfg, q, exec, logger, nil)
 
 	r.pool <- struct{}{}
 	r.wg.Add(1)
@@ -319,7 +319,7 @@ func TestPersistExecutionLogs(t *testing.T) {
 		MaxConcurrency: 1,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(cfg, &fakeQueue{}, &fakeExecutor{}, logger)
+	r := New(cfg, &fakeQueue{}, &fakeExecutor{}, logger, nil)
 
 	task := &queue.TaskRun{ResultID: 42, Attempts: 2}
 	logsURI := r.persistExecutionLogs(task, "stdout-text", "stderr-text")
@@ -367,17 +367,17 @@ func TestRunnerHandlesCancellation(t *testing.T) {
 	q := &cancelQueue{}
 	exec := &blockingExecutor{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(cfg, q, exec, logger)
+	r := New(cfg, q, exec, logger, nil)
 
 	r.pool <- struct{}{}
 	r.wg.Add(1)
 
 	task := &queue.TaskRun{
-		ResultID:  1,
-		QueueName: "default",
-		SpecJSON:  json.RawMessage(`{"task_path":"allowed.task"}`),
-		SpecHash:  "hash",
-		Attempts:  1,
+		ResultID:    1,
+		QueueName:   "default",
+		SpecJSON:    json.RawMessage(`{"task_path":"allowed.task"}`),
+		SpecHash:    "hash",
+		Attempts:    1,
 		MaxAttempts: 1,
 	}
 	r.runTask(context.Background(), task)

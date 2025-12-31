@@ -178,12 +178,17 @@ python manage.py reproq worker</pre>
                 <p>Restrict access by IP/CIDR with <code>METRICS_ALLOW_CIDRS</code> (for example <code>127.0.0.1/32,10.0.0.0/8</code>).</p>
                 <p>Enable HTTPS with <code>METRICS_TLS_CERT</code> and <code>METRICS_TLS_KEY</code>; add <code>METRICS_TLS_CLIENT_CA</code> to require mTLS client certificates.</p>
                 <p>Unauthorized requests are rate-limited (defaults: 30/min per remote host). Adjust via <code>--metrics-auth-limit</code> and <code>--metrics-auth-window</code>.</p>
+                <p>The same server also exposes an optional <code>/events</code> endpoint with task lifecycle events over SSE. Filter with <code>?queue=</code>, <code>?worker_id=</code>, or <code>?task_id=</code>.</p>
                 <p>Exposed metrics include:</p>
                 <ul>
                     <li><code>reproq_tasks_processed_total</code>: Counter of tasks by queue and status.</li>
                     <li><code>reproq_tasks_claimed_total</code> / <code>reproq_tasks_completed_total</code>: Claim and completion counts.</li>
                     <li><code>reproq_claim_duration_seconds</code> / <code>reproq_exec_duration_seconds</code>: Claim and execution timings.</li>
                     <li><code>reproq_queue_wait_duration_seconds</code>: Time spent waiting in queue.</li>
+                    <li><code>reproq_queue_depth</code>: Total queued tasks (READY/WAITING).</li>
+                    <li><code>reproq_tasks_running</code>: Tasks currently running.</li>
+                    <li><code>reproq_workers</code>: Registered workers.</li>
+                    <li><code>reproq_concurrency_in_use</code> / <code>reproq_concurrency_limit</code>: Concurrency usage and capacity.</li>
                     <li>Standard Go runtime metrics (goroutines, heap, etc).</li>
                 </ul>
             </section>

@@ -17,14 +17,16 @@ import (
 
 	"reproq-worker/internal/config"
 	"reproq-worker/internal/db"
+	"reproq-worker/internal/events"
 	"reproq-worker/internal/executor"
 	"reproq-worker/internal/logging"
+	"reproq-worker/internal/metrics"
 	"reproq-worker/internal/queue"
 	"reproq-worker/internal/runner"
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.132"
+const Version = "0.0.135"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -236,12 +238,14 @@ func runWorker(args []string) {
 	defer pool.Close()
 
 	addr := ""
+	var broker *events.Broker
 	if *metricsAddr != "" {
 		addr = *metricsAddr
 	} else if *metricsPort > 0 {
 		addr = fmt.Sprintf(":%d", *metricsPort)
 	}
 	if addr != "" {
+		broker = events.NewBroker(200)
 		allowlist, err := web.ParseCIDRAllowlist(*metricsAllowCIDRs)
 		if err != nil {
 			log.Fatal(err)
@@ -263,13 +267,14 @@ func runWorker(args []string) {
 		if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
 			logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN", "addr", addr)
 		}
-		server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig)
+		server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
 		go func() {
 			logger.Info("Serving health and metrics", "addr", addr)
 			if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
 				logger.Error("Metrics server error", "error", err)
 			}
 		}()
+		metrics.StartCollector(ctx, pool, 2*time.Second, logger)
 	}
 
 	q := queue.NewService(pool)
@@ -282,7 +287,11 @@ func runWorker(args []string) {
 		MaxStderrBytes:  cfg.MaxStderrBytes,
 	}
 
-	r := runner.New(cfg, q, exec, logger)
+	var publisher events.Publisher = events.NoopPublisher{}
+	if broker != nil {
+		publisher = broker
+	}
+	r := runner.New(cfg, q, exec, logger, publisher)
 	if err := r.Start(ctx); err != nil {
 		log.Fatal(err)
 	}

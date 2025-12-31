@@ -19,7 +19,7 @@ This review covers the Go worker runtime, metrics/health endpoints, and logging.
 
 ## Risks and recommendations
 ### Metrics and health exposure
-Risk: `/metrics` and `/healthz` can expose operational data when bound publicly.
+Risk: `/metrics`, `/healthz`, and `/events` can expose operational data when bound publicly.
 Recommendation:
 - Bind to `127.0.0.1` or restrict at the network layer.
 - Use `METRICS_AUTH_TOKEN` when exposure is required.
