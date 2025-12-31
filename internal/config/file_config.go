@@ -60,7 +60,6 @@ type MetricsFileConfig struct {
 	Addr           string   `yaml:"addr" toml:"addr"`
 	Port           *int     `yaml:"port" toml:"port"`
 	AuthToken      string   `yaml:"auth_token" toml:"auth_token"`
-	TUISecret      string   `yaml:"tui_secret" toml:"tui_secret"`
 	AllowCIDRs     []string `yaml:"allow_cidrs" toml:"allow_cidrs"`
 	AuthLimit      *int     `yaml:"auth_limit" toml:"auth_limit"`
 	AuthWindow     string   `yaml:"auth_window" toml:"auth_window"`

@@ -68,7 +68,6 @@ type metricsConfig struct {
 	addr           string
 	port           int
 	authToken      string
-	authSecret     string
 	allowCIDRs     string
 	authLimit      int
 	authWindow     time.Duration
@@ -84,13 +83,6 @@ func defaultMetricsConfig() metricsConfig {
 		authWindow:     web.DefaultAuthWindow,
 		authMaxEntries: web.DefaultAuthMaxEntries,
 	}
-}
-
-func normalizeMetricsAuth(token, secret string) (string, string, bool) {
-	if token == "" && secret != "" {
-		return secret, secret, true
-	}
-	return token, secret, false
 }
 
 func isLowMemoryMode() bool {
@@ -119,9 +111,6 @@ func applyMetricsFileConfig(cfg *metricsConfig, fileCfg *config.FileConfig) erro
 	}
 	if metrics.AuthToken != "" {
 		cfg.authToken = metrics.AuthToken
-	}
-	if metrics.TUISecret != "" {
-		cfg.authSecret = metrics.TUISecret
 	}
 	if len(metrics.AllowCIDRs) > 0 {
 		cfg.allowCIDRs = strings.Join(metrics.AllowCIDRs, ",")
@@ -157,12 +146,6 @@ func applyMetricsFileConfig(cfg *metricsConfig, fileCfg *config.FileConfig) erro
 func applyMetricsEnv(cfg *metricsConfig) error {
 	if val := os.Getenv("METRICS_ADDR"); val != "" {
 		cfg.addr = val
-	}
-	if val := os.Getenv("METRICS_AUTH_TOKEN"); val != "" {
-		cfg.authToken = val
-	}
-	if val := os.Getenv("REPROQ_TUI_SECRET"); val != "" {
-		cfg.authSecret = val
 	}
 	if val := os.Getenv("METRICS_ALLOW_CIDRS"); val != "" {
 		cfg.allowCIDRs = val
@@ -231,7 +214,6 @@ func runWorker(args []string) {
 	metricsPort := fs.Int("metrics-port", metricsCfg.port, "Port to serve Prometheus metrics (0 to disable)")
 	metricsAddr := fs.String("metrics-addr", metricsCfg.addr, "Address to serve health/metrics (overrides --metrics-port)")
 	metricsToken := fs.String("metrics-auth-token", metricsCfg.authToken, "Bearer token required for /metrics and /healthz")
-	metricsSecret := fs.String("metrics-auth-secret", metricsCfg.authSecret, "Shared secret for TUI auth tokens")
 	metricsAllowCIDRs := fs.String("metrics-allow-cidrs", metricsCfg.allowCIDRs, "Comma-separated IP/CIDR allow-list for /metrics and /healthz")
 	metricsAuthLimit := fs.Int("metrics-auth-limit", metricsCfg.authLimit, "Unauthorized request limit per window")
 	metricsAuthWindow := fs.Duration("metrics-auth-window", metricsCfg.authWindow, "Window for unauthorized request rate limiting")
@@ -249,11 +231,6 @@ func runWorker(args []string) {
 	cfg.Version = Version
 
 	logger := logging.Init(cfg.WorkerID)
-	if token, secret, used := normalizeMetricsAuth(*metricsToken, *metricsSecret); used {
-		*metricsToken = token
-		*metricsSecret = secret
-		logger.Info("Using REPROQ_TUI_SECRET for metrics bearer token", "env", "REPROQ_TUI_SECRET")
-	}
 	lowMemory := isLowMemoryMode()
 	if lowMemory {
 		logger.Warn("Low memory mode enabled; metrics/health/events disabled", "env", "LOW_MEMORY_MODE")
@@ -304,10 +281,10 @@ func runWorker(args []string) {
 				log.Fatal(err)
 			}
 			clientAuth := tlsConfig != nil && tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert
-			if *metricsToken == "" && *metricsSecret == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
-				logger.Warn("Metrics endpoint has no auth; bind to localhost or set METRICS_AUTH_TOKEN/REPROQ_TUI_SECRET", "addr", addr)
+			if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
+				logger.Warn("Metrics endpoint has no auth; bind to localhost or set --metrics-auth-token", "addr", addr)
 			}
-			server := web.NewServer(pool, addr, *metricsToken, *metricsSecret, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
+			server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
 			go func() {
 				logger.Info("Serving health and metrics", "addr", addr)
 				if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {

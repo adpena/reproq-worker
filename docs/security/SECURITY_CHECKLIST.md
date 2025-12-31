@@ -6,7 +6,7 @@
 - [ ] Publish platform binaries only after running `go test ./internal/...`.
 
 ## Secrets and configuration
-- [ ] Use `METRICS_AUTH_TOKEN` when exposing `/metrics`, `/healthz`, or `/events`.
+- [ ] Require bearer auth (`--metrics-auth-token` or `metrics.auth_token`) when exposing `/metrics`, `/healthz`, or `/events`.
 - [ ] Set `METRICS_ALLOW_CIDRS` to restrict metrics/health to trusted networks.
 - [ ] Use `METRICS_TLS_CERT` and `METRICS_TLS_KEY` to serve metrics over HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 - [ ] Keep metrics auth rate limiting enabled; tune via `METRICS_AUTH_LIMIT` and `METRICS_AUTH_WINDOW`.
