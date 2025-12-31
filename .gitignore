@@ -19,8 +19,8 @@
 DATABASE_URL
 
 # Reproq specific
-reproq
-reproq-*
+/reproq
+/reproq-*
 bin/
 .gocache/
 
