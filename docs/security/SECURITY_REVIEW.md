@@ -22,7 +22,7 @@ This review covers the Go worker runtime, metrics/health endpoints, and logging.
 Risk: `/metrics`, `/healthz`, and `/events` can expose operational data when bound publicly.
 Recommendation:
 - Bind to `127.0.0.1` or restrict at the network layer.
-- Use `--metrics-auth-token` (or `metrics.auth_token` in config) when exposure is required.
+- Use `METRICS_AUTH_TOKEN` (or `--metrics-auth-token` / `metrics.auth_token`) when exposure is required.
 - Use `METRICS_ALLOW_CIDRS` to restrict access to trusted ranges.
 - Consider mTLS for metrics in regulated environments.
 

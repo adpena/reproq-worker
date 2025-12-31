@@ -174,7 +174,7 @@ python manage.py reproq worker</pre>
                 <p>Enable the built-in metrics exporter to monitor throughput and error rates. The same port also exposes <code>/healthz</code> for readiness checks.</p>
                 <pre># Start with metrics enabled
 ./reproq worker --metrics-port 9090</pre>
-                <p>For security, bind to localhost (e.g., <code>--metrics-addr 127.0.0.1:9090</code>) or set <code>--metrics-auth-token</code> to require a bearer token.</p>
+                <p>For security, bind to localhost (e.g., <code>--metrics-addr 127.0.0.1:9090</code>) or set <code>METRICS_AUTH_TOKEN</code> to require a bearer token.</p>
                 <p>Restrict access by IP/CIDR with <code>METRICS_ALLOW_CIDRS</code> (for example <code>127.0.0.1/32,10.0.0.0/8</code>).</p>
                 <p>Enable HTTPS with <code>METRICS_TLS_CERT</code> and <code>METRICS_TLS_KEY</code>; add <code>METRICS_TLS_CLIENT_CA</code> to require mTLS client certificates.</p>
                 <p>Unauthorized requests are rate-limited (defaults: 30/min per remote host). Adjust via <code>--metrics-auth-limit</code> and <code>--metrics-auth-window</code>.</p>

@@ -75,7 +75,7 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
 1. Bind to localhost or a private interface:
    - `--metrics-addr 127.0.0.1:9090`
 2. Require bearer auth on the endpoint:
-   - `--metrics-auth-token ...` or `metrics.auth_token` in the config file
+   - `METRICS_AUTH_TOKEN=...` or `--metrics-auth-token ...`
 3. Restrict access by IP or CIDR when possible:
    - `METRICS_ALLOW_CIDRS=127.0.0.1/32,10.0.0.0/8`
 4. Enable TLS (and optionally mTLS):

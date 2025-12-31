@@ -1,6 +1,10 @@
 package web
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,4 +82,35 @@ func TestAuthorizeAllowlist(t *testing.T) {
 	if !s.authorize(w, req) {
 		t.Fatal("expected allowed for allowlisted host")
 	}
+}
+
+func TestAuthorizeTUIToken(t *testing.T) {
+	secret := "metrics-token"
+	token := signJWT(secret, map[string]interface{}{
+		"aud":       "reproq-tui",
+		"exp":       time.Now().Add(5 * time.Minute).Unix(),
+		"iss":       "reproq-django",
+		"superuser": true,
+	})
+	s := &Server{secret: secret, limiter: newAuthLimiter(10, time.Minute, 10)}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	if !s.authorize(w, req) {
+		t.Fatal("expected authorized with TUI token")
+	}
+}
+
+func signJWT(secret string, payload map[string]interface{}) string {
+	header := map[string]string{"alg": "HS256", "typ": "JWT"}
+	headerRaw, _ := json.Marshal(header)
+	payloadRaw, _ := json.Marshal(payload)
+	headerB64 := base64.RawURLEncoding.EncodeToString(headerRaw)
+	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadRaw)
+	signingInput := headerB64 + "." + payloadB64
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signingInput + "." + signature
 }

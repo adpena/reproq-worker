@@ -147,6 +147,9 @@ func applyMetricsEnv(cfg *metricsConfig) error {
 	if val := os.Getenv("METRICS_ADDR"); val != "" {
 		cfg.addr = val
 	}
+	if val := os.Getenv("METRICS_AUTH_TOKEN"); val != "" {
+		cfg.authToken = val
+	}
 	if val := os.Getenv("METRICS_ALLOW_CIDRS"); val != "" {
 		cfg.allowCIDRs = val
 	}
@@ -284,7 +287,7 @@ func runWorker(args []string) {
 			if *metricsToken == "" && !isLoopbackAddr(addr) && allowlist == nil && !clientAuth {
 				logger.Warn("Metrics endpoint has no auth; bind to localhost or set --metrics-auth-token", "addr", addr)
 			}
-			server := web.NewServer(pool, addr, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
+			server := web.NewServer(pool, addr, *metricsToken, *metricsToken, *metricsAuthLimit, *metricsAuthWindow, *metricsAuthMaxEntries, allowlist, tlsConfig, broker)
 			go func() {
 				logger.Info("Serving health and metrics", "addr", addr)
 				if err := server.Start(ctx); err != nil && err != http.ErrServerClosed {
