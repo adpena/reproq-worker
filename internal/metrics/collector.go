@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultInterval = 2 * time.Second
-	queryTimeout    = 2 * time.Second
+	queryTimeout    = 5 * time.Second
 )
 
 var (
@@ -43,19 +43,24 @@ func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Durat
 		interval = defaultInterval
 	}
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
 		for {
+			start := time.Now()
 			if err := collectTaskMetrics(ctx, pool); err != nil {
 				logWarn(logger, "Queue metrics collection failed", err)
 			}
 			if err := collectWorkerMetrics(ctx, pool); err != nil {
 				logWarn(logger, "Worker metrics collection failed", err)
 			}
+			wait := interval - time.Since(start)
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}()
