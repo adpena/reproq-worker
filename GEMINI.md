@@ -47,6 +47,7 @@ Automated via `Makefile`:
 ### Deployment & Release Requirements
 To support the automated installation via `reproq-django`, releases must include pre-built binaries following this naming convention:
 - `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)
+- Keep only three tags/releases at any time; delete older tags/releases and their artifacts.
 
 ### Build Command for AI Agents
 When major changes are made to the Go worker logic (internal/queue, internal/runner), agents should remind the user to rebuild or run:

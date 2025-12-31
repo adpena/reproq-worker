@@ -29,6 +29,7 @@ GOOS=windows GOARCH=amd64 go build -o reproq-windows-amd64.exe ./cmd/reproq
 - **Validation**: Ensure `reproq --version` returns the expected string.
 - **Model Sync**: Any changes to `internal/queue/models.go` must be mirrored in `reproq-django/src/reproq_django/models.py`.
 - **Protocol**: The JSON contract between the Go worker and `python -m reproq_django.executor` is strict. Changes must be applied to both simultaneously.
+- **Release Retention**: Keep only three tags/releases at any time; delete older tags/releases and their artifacts.
 
 ## Code/Doc Alignment Notes
 - **Worker DSN**: `--dsn` overrides `DATABASE_URL`; docs should reflect that `DATABASE_URL` is optional when flags are provided.
