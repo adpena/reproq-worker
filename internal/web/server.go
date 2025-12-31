@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"reproq-worker/internal/events"
@@ -20,17 +21,19 @@ type Server struct {
 	pool    *pgxpool.Pool
 	addr    string
 	token   string
+	secret  string
 	limiter *authLimiter
 	allow   *CIDRAllowlist
 	tls     *tls.Config
 	events  *events.Broker
 }
 
-func NewServer(pool *pgxpool.Pool, addr string, token string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist, tlsConfig *tls.Config, broker *events.Broker) *Server {
+func NewServer(pool *pgxpool.Pool, addr string, token string, secret string, authLimit int, authWindow time.Duration, authMaxEntries int, allowlist *CIDRAllowlist, tlsConfig *tls.Config, broker *events.Broker) *Server {
 	return &Server{
 		pool:    pool,
 		addr:    addr,
 		token:   token,
+		secret:  secret,
 		limiter: newAuthLimiter(authLimit, authWindow, authMaxEntries),
 		allow:   allowlist,
 		tls:     tlsConfig,
@@ -204,9 +207,24 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if s.token == "" {
+		if s.secret == "" {
+			return true
+		}
+	}
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		token := strings.TrimSpace(authHeader[len("bearer "):])
+		if s.token != "" && token == s.token {
+			return true
+		}
+		if s.secret != "" && verifyTUIToken(token, s.secret) {
+			return true
+		}
+	}
+	if s.token == "" && s.secret == "" {
 		return true
 	}
-	if r.Header.Get("Authorization") != "Bearer "+s.token {
+	if s.token != "" || s.secret != "" {
 		limited := false
 		if s.limiter != nil && !s.limiter.allow(host, time.Now()) {
 			limited = true

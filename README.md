@@ -157,6 +157,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 | `--metrics-port` | - | `0` (Disabled) | Port to serve Prometheus metrics and health (e.g., `9090`). |
 | `--metrics-addr` | `METRICS_ADDR` | - | Full address for health/metrics (overrides `--metrics-port`). |
 | `--metrics-auth-token` | `METRICS_AUTH_TOKEN` | - | Require `Authorization: Bearer <token>` for health/metrics. |
+| `--metrics-auth-secret` | `REPROQ_TUI_SECRET` | - | Shared secret to accept signed TUI tokens. |
 | `--metrics-allow-cidrs` | `METRICS_ALLOW_CIDRS` | - | Comma-separated IP/CIDR allow-list for health/metrics. |
 | `--metrics-tls-cert` | `METRICS_TLS_CERT` | - | TLS certificate path for health/metrics. |
 | `--metrics-tls-key` | `METRICS_TLS_KEY` | - | TLS private key path for health/metrics. |
@@ -167,7 +168,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 
 When `--metrics-port` or `--metrics-addr` is set, the worker serves `GET /metrics`, `GET /healthz`, and `GET /events` (SSE).
 Filter events with query params like `?queue=default&worker_id=worker-1&task_id=123`.
-Use `--metrics-addr 127.0.0.1:9090` to bind locally, or set `METRICS_AUTH_TOKEN` to require auth.
+Use `--metrics-addr 127.0.0.1:9090` to bind locally, or set `METRICS_AUTH_TOKEN` or `REPROQ_TUI_SECRET` to require auth.
 Set `METRICS_ALLOW_CIDRS` to restrict access by IP or CIDR (for example `127.0.0.1/32,10.0.0.0/8`).
 Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).

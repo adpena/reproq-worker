@@ -52,8 +52,6 @@ type Config struct {
 
 	ShutdownTimeout time.Duration
 
-	HealthAddr string // HTTP address for health/metrics
-
 	PriorityAgingFactor float64 // How many seconds of waiting equals 1 priority point
 
 }
@@ -132,8 +130,6 @@ func DefaultConfig() *Config {
 
 		ShutdownTimeout: 30 * time.Second,
 
-		HealthAddr: ":8080",
-
 		PriorityAgingFactor: 60.0,
 	}
 
@@ -159,10 +155,6 @@ func ApplyEnv(c *Config) error {
 
 	if val := os.Getenv("REPROQ_LOGS_DIR"); val != "" {
 		c.LogsDir = val
-	}
-
-	if val := os.Getenv("HEALTH_ADDR"); val != "" {
-		c.HealthAddr = val
 	}
 
 	if val := os.Getenv("PRIORITY_AGING_FACTOR"); val != "" {

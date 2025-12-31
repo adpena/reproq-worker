@@ -48,7 +48,6 @@ type WorkerFileConfig struct {
 	ExecTimeout            string   `yaml:"exec_timeout" toml:"exec_timeout"`
 	MaxAttemptsDefault     *int     `yaml:"max_attempts_default" toml:"max_attempts_default"`
 	ShutdownTimeout        string   `yaml:"shutdown_timeout" toml:"shutdown_timeout"`
-	HealthAddr             string   `yaml:"health_addr" toml:"health_addr"`
 	PriorityAgingFactor    *float64 `yaml:"priority_aging_factor" toml:"priority_aging_factor"`
 }
 
@@ -61,6 +60,7 @@ type MetricsFileConfig struct {
 	Addr           string   `yaml:"addr" toml:"addr"`
 	Port           *int     `yaml:"port" toml:"port"`
 	AuthToken      string   `yaml:"auth_token" toml:"auth_token"`
+	TUISecret      string   `yaml:"tui_secret" toml:"tui_secret"`
 	AllowCIDRs     []string `yaml:"allow_cidrs" toml:"allow_cidrs"`
 	AuthLimit      *int     `yaml:"auth_limit" toml:"auth_limit"`
 	AuthWindow     string   `yaml:"auth_window" toml:"auth_window"`
@@ -202,9 +202,6 @@ func ApplyFileConfig(cfg *Config, fileCfg *FileConfig) error {
 			return err
 		}
 		cfg.ShutdownTimeout = parsed
-	}
-	if fileCfg.Worker.HealthAddr != "" {
-		cfg.HealthAddr = fileCfg.Worker.HealthAddr
 	}
 	if fileCfg.Worker.PriorityAgingFactor != nil {
 		cfg.PriorityAgingFactor = *fileCfg.Worker.PriorityAgingFactor

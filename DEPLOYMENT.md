@@ -76,6 +76,7 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
    - `--metrics-addr 127.0.0.1:9090`
 2. Require bearer auth on the endpoint:
    - `METRICS_AUTH_TOKEN=...` or `--metrics-auth-token ...`
+   - For TUI login, set `REPROQ_TUI_SECRET=...` or `--metrics-auth-secret ...`
 3. Restrict access by IP or CIDR when possible:
    - `METRICS_ALLOW_CIDRS=127.0.0.1/32,10.0.0.0/8`
 4. Enable TLS (and optionally mTLS):

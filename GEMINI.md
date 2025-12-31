@@ -58,7 +58,6 @@ go build -o reproq ./cmd/reproq
 - Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).
 - Worker registration uses the CLI `Version` constant.
 - Config reads `DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
-- `HEALTH_ADDR` is a legacy env var and is not wired to the metrics server (use `--metrics-addr` / `METRICS_ADDR`).
 
 ## Reliability Invariants
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
