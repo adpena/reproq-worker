@@ -48,7 +48,7 @@ var (
 
 	WorkerMemUsage = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "reproq_worker_mem_usage_bytes",
-		Help: "Current memory usage (RSS) of the worker process in bytes",
+		Help: "Current Go heap allocation (approximate memory usage) in bytes",
 	})
 
 	// DB Pool Telemetry

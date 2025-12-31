@@ -308,7 +308,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"worker_id": r.cfg.WorkerID,
 		})
 		completeStart := time.Now()
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, false, time.Now(), logsURI)
+		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, false, time.Now(), logsURI); err != nil {
+			logger.Error("Failed to mark cancellation", "error", err)
+		}
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
@@ -327,7 +329,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":      time.Now(),
 		})
 		completeStart := time.Now()
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI)
+		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI); err != nil {
+			logger.Error("Failed to mark infra error", "error", err)
+		}
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		r.publishEvent("error", "task_infra_error", "execution infrastructure error", task, specTaskPath, map[string]string{
@@ -341,7 +345,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "success").Inc()
 		completeStart := time.Now()
-		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI)
+		if err := r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI); err != nil {
+			logger.Error("Failed to mark success", "error", err)
+		}
 		dbOpDuration.WithLabelValues("complete_success").Observe(time.Since(completeStart).Seconds())
 		r.publishEvent("info", "task_success", "task completed", task, specTaskPath, nil)
 	} else {
@@ -375,7 +381,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 
 		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
 		completeStart := time.Now()
-		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI)
+		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI); err != nil {
+			logger.Error("Failed to mark failure", "error", err)
+		}
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		eventType := "task_failed"
 		level := "error"

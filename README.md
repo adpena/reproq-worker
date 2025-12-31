@@ -154,6 +154,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 | `--queues` | `QUEUE_NAMES` | `default` | Comma-separated list of queue names to poll. |
 | `--allowed-task-modules` | `ALLOWED_TASK_MODULES` | `myapp.tasks.,tasks.` | Comma-separated allow-list of task module prefixes (`*` disables validation; dev only). |
 | `--logs-dir` | `REPROQ_LOGS_DIR` | - | Directory to persist stdout/stderr logs (updates `logs_uri`). |
+| - | `REPROQ_MEMORY_LOG_INTERVAL` | - | Log worker memory stats at the given interval (e.g., `60s`). |
 | `--metrics-port` | - | `0` (Disabled) | Port to serve Prometheus metrics and health (e.g., `9090`). |
 | `--metrics-addr` | `METRICS_ADDR` | - | Full address for health/metrics (overrides `--metrics-port`). |
 | `--metrics-auth-token` | `METRICS_AUTH_TOKEN` | - | Require `Authorization: Bearer <token>` for health/metrics. |
@@ -173,6 +174,7 @@ Set `METRICS_ALLOW_CIDRS` to restrict access by IP or CIDR (for example `127.0.0
 Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).
 Set `LOW_MEMORY_MODE=1` to skip the metrics/health/events server and the metrics collector.
+Set `REPROQ_MEMORY_LOG_INTERVAL=60s` to emit periodic memory stats (includes RSS on Linux).
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
 Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
 When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.

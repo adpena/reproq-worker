@@ -38,7 +38,9 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	// 1. Find due tasks and lock them
 	query := `

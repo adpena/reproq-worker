@@ -18,7 +18,7 @@ type Metrics struct {
 	Retried   int64
 
 	// Latencies in milliseconds
-	ClaimLatencies    []int64
+	ClaimLatencies     []int64
 	QueueWaitLatencies []int64
 	ExecLatencies      []int64
 }
@@ -72,10 +72,18 @@ func (m *Metrics) Report() {
 		},
 	}
 
-	if os.Getenv("REPORT_JSON") != "" {
-		f, _ := os.Create(os.Getenv("REPORT_JSON"))
-		json.NewEncoder(f).Encode(reportJSON)
-		f.Close()
+	if path := os.Getenv("REPORT_JSON"); path != "" {
+		f, err := os.Create(path)
+		if err == nil {
+			if err := json.NewEncoder(f).Encode(reportJSON); err != nil {
+				fmt.Printf("Failed to write report JSON: %v\n", err)
+			}
+			if err := f.Close(); err != nil {
+				fmt.Printf("Failed to close report JSON: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Failed to create report JSON: %v\n", err)
+		}
 	}
 }
 
@@ -84,7 +92,7 @@ func summarize(latencies []int64) map[string]int64 {
 		return nil
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	
+
 	return map[string]int64{
 		"p50": latencies[len(latencies)*50/100],
 		"p95": latencies[len(latencies)*95/100],

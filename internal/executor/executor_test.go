@@ -22,14 +22,14 @@ func TestShellExecutor_PayloadTooLarge(t *testing.T) {
 func TestShellExecutor_InvalidJSON(t *testing.T) {
 	// We use 'echo' as a stub for python
 	e := &ShellExecutor{
-		PythonBin:      "echo",
-		ExecutorModule: "stub",
-		PayloadMode:    "inline",
-		MaxStdoutBytes: 1024,
-		MaxStderrBytes: 1024,
+		PythonBin:       "echo",
+		ExecutorModule:  "stub",
+		PayloadMode:     "inline",
+		MaxStdoutBytes:  1024,
+		MaxStderrBytes:  1024,
 		MaxPayloadBytes: 1024,
 	}
-	
+
 	// echo -m stub --result-id 1 --attempt 0 --payload-json "not json"
 	// will output: -m stub --result-id 1 --attempt 0 --payload-json not json
 	// which is not valid JSON
@@ -48,7 +48,7 @@ func TestShellExecutor_InvalidJSON(t *testing.T) {
 
 func TestBoundedBuffer(t *testing.T) {
 	b := newBoundedBuffer(5)
-	b.Write([]byte("hello world"))
+	_, _ = b.Write([]byte("hello world"))
 	if b.buf.String() != "hello" {
 		t.Errorf("expected 'hello', got %q", b.buf.String())
 	}
@@ -75,8 +75,8 @@ func TestMockExecutor(t *testing.T) {
 	}
 
 	// Test Timeout
-	res, _, _, err = m.Execute(ctx, 1, 0, json.RawMessage("{}"), 5*time.Millisecond)
-	// Execute doesn't return ResultEnvelope on infra error/timeout usually, 
+	_, _, _, err = m.Execute(ctx, 1, 0, json.RawMessage("{}"), 5*time.Millisecond)
+	// Execute doesn't return ResultEnvelope on infra error/timeout usually,
 	// but MockExecutor returns ctx.Err() directly
 	if err == nil {
 		t.Fatal("expected error on timeout")

@@ -75,7 +75,7 @@ func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Durat
 func collectSystemMetrics() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	runner.WorkerMemUsage.Set(float64(m.Alloc)) // Using Alloc for simplicity, or Sys for total reserved
+	runner.WorkerMemUsage.Set(float64(m.HeapAlloc)) // Heap allocation (RSS via logs on Linux).
 }
 
 func collectPoolMetrics(pool *pgxpool.Pool) {

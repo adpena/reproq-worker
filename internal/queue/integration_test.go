@@ -141,7 +141,9 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task on attempt 2, got nil")
 	}
-	err = s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now(), nil)
+	if err := s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now(), nil); err != nil {
+		t.Fatalf("failed to complete failure: %v", err)
+	}
 
 	pool.QueryRow(ctx, "SELECT status FROM task_runs WHERE result_id = $1", task.ResultID).Scan(&status)
 	if status != "FAILED" {
@@ -277,7 +279,7 @@ func TestRateLimitingClaim(t *testing.T) {
 		t.Fatalf("failed to update rate limit: %v", err)
 	}
 
-	task, err = s.Claim(ctx, "w-rate-2", "default", 60, 0)
+	_, err = s.Claim(ctx, "w-rate-2", "default", 60, 0)
 	if err != nil {
 		t.Fatalf("expected claim to succeed, got %v", err)
 	}

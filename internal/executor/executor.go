@@ -89,16 +89,21 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	if e.PayloadMode == "stdin" {
 		go func() {
 			defer stdinPipe.Close()
-			stdinPipe.Write(payload)
+			if _, writeErr := stdinPipe.Write(payload); writeErr != nil {
+				return
+			}
 		}()
 	}
 
-	err = cmd.Wait()
+	waitErr := cmd.Wait()
 
 	// Process Cleanup
 	if ctx.Err() == context.DeadlineExceeded {
 		terminateProcessGroup(cmd)
 		return nil, stdoutBuf.String(), stderrBuf.String(), context.DeadlineExceeded
+	}
+	if waitErr != nil && stderrBuf != nil {
+		_, _ = stderrBuf.Write([]byte(waitErr.Error()))
 	}
 
 	stdoutBytes := bytes.TrimSpace(stdoutBuf.Bytes())

@@ -26,7 +26,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.139"
+const Version = "0.0.140"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -225,7 +225,9 @@ func runWorker(args []string) {
 	metricsTLSKey := fs.String("metrics-tls-key", metricsCfg.tlsKey, "TLS private key path for health/metrics")
 	metricsTLSClientCA := fs.String("metrics-tls-client-ca", metricsCfg.tlsClientCA, "Optional client CA bundle for mTLS on health/metrics")
 	cfg.BindFlags(fs)
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if cfg.DatabaseURL == "" {
 		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
@@ -234,6 +236,7 @@ func runWorker(args []string) {
 	cfg.Version = Version
 
 	logger := logging.Init(cfg.WorkerID)
+	memoryLogInterval := memoryLogIntervalFromEnv(logger)
 	lowMemory := isLowMemoryMode()
 	if lowMemory {
 		logger.Warn("Low memory mode enabled; metrics/health/events disabled", "env", "LOW_MEMORY_MODE")
@@ -247,6 +250,7 @@ func runWorker(args []string) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	startMemoryLogger(ctx, logger, memoryLogInterval)
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -371,7 +375,9 @@ func runBeat(args []string) {
 	fs.String("config", configPath, "Path to reproq config file")
 	dsn := fs.String("dsn", beatDSN, "Postgres DSN")
 	interval := fs.Duration("interval", beatInterval, "Polling interval for periodic tasks")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if *dsn == "" {
 		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
@@ -419,7 +425,9 @@ func runReplay(args []string) {
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	id := fs.Int64("id", 0, "Result ID to replay")
 	specHash := fs.String("spec-hash", "", "Spec hash to replay (uses latest match)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if *dsn == "" {
 		log.Fatal("DSN required")
@@ -465,7 +473,9 @@ func runLimit(args []string) {
 		key := fs.String("key", "", "Rate limit key (queue:<name> | task:<path> | global)")
 		rate := fs.Float64("rate", 0, "Tokens per second")
 		burst := fs.Int("burst", 1, "Burst size")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" || *key == "" {
 			log.Fatal("DSN and --key required")
@@ -486,7 +496,9 @@ func runLimit(args []string) {
 	case "ls":
 		fs := flag.NewFlagSet("limit ls", flag.ExitOnError)
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" {
 			log.Fatal("DSN required")
@@ -516,7 +528,9 @@ func runLimit(args []string) {
 		fs := flag.NewFlagSet("limit rm", flag.ExitOnError)
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 		key := fs.String("key", "", "Rate limit key to delete")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" || *key == "" {
 			log.Fatal("DSN and --key required")
@@ -552,7 +566,9 @@ func runPrune(args []string) {
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 		limit := fs.Int("limit", 0, "Max tasks to delete (0 = no limit)")
 		dryRun := fs.Bool("dry-run", false, "Show count without deleting")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" {
 			log.Fatal("DSN required")
@@ -584,7 +600,9 @@ func runCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
 	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 	id := fs.Int64("id", 0, "Result ID to cancel")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
 
 	if *dsn == "" || *id == 0 {
 		log.Fatal("DSN and --id required")
@@ -621,7 +639,9 @@ func runTriage(args []string) {
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 		limit := fs.Int("limit", 50, "Max tasks to list")
 		queueName := fs.String("queue", "", "Filter by queue name")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" {
 			log.Fatal("DSN required")
@@ -659,7 +679,9 @@ func runTriage(args []string) {
 		fs := flag.NewFlagSet("triage inspect", flag.ExitOnError)
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 		id := fs.Int64("id", 0, "Result ID to inspect")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" || *id == 0 {
 			log.Fatal("DSN and --id required")
@@ -701,7 +723,9 @@ func runTriage(args []string) {
 		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
 		id := fs.Int64("id", 0, "Result ID to retry")
 		all := fs.Bool("all", false, "Retry all failed tasks")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
 
 		if *dsn == "" {
 			log.Fatal("DSN required")

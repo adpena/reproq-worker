@@ -199,7 +199,9 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	// 1. Finalize the task
 	query := `
@@ -323,7 +325,9 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	res, err := tx.Exec(ctx, query, status, errorObj, nextRunAfter, resultID, workerID, lastError, logsURI)
 	if err != nil {

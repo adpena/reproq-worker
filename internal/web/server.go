@@ -57,11 +57,11 @@ func (s *Server) Start(ctx context.Context) error {
 		if err := s.pool.Ping(r.Context()); err != nil {
 			slog.Warn("Health check failed", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("unhealthy"))
+			_, _ = w.Write([]byte("unhealthy"))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	// Prometheus metrics
@@ -96,7 +96,9 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("Metrics server shutdown error", "error", err)
+		}
 	}()
 
 	if s.tls != nil {
@@ -115,13 +117,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.events == nil {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("events not configured"))
+		_, _ = w.Write([]byte("events not configured"))
 		return
 	}
 	filter, err := parseEventFilter(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error()))
+		_, _ = w.Write([]byte(err.Error()))
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -134,7 +136,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("streaming unsupported"))
+		_, _ = w.Write([]byte("streaming unsupported"))
 		return
 	}
 
@@ -199,10 +201,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 		)
 		if limited {
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte("rate limited"))
+			_, _ = w.Write([]byte("rate limited"))
 		} else {
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("forbidden"))
+			_, _ = w.Write([]byte("forbidden"))
 		}
 		return false
 	}
@@ -234,10 +236,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 		)
 		if limited {
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte("rate limited"))
+			_, _ = w.Write([]byte("rate limited"))
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("unauthorized"))
+			_, _ = w.Write([]byte("unauthorized"))
 		}
 		return false
 	}
