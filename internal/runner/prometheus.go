@@ -33,4 +33,10 @@ var (
 		Help:    "Time task spent in queue before execution started",
 		Buckets: prometheus.ExponentialBuckets(1, 2, 10),
 	}, []string{"queue"})
+
+	dbOpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "reproq_db_operation_duration_seconds",
+		Help:    "Time spent on database operations",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"operation"})
 )

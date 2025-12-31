@@ -46,7 +46,7 @@ func (s *Service) ListFailedTasks(ctx context.Context, limit int, queueName stri
 		SELECT
 			result_id,
 			queue_name,
-			spec_json->>'task_path' AS task_path,
+			COALESCE(task_path, spec_json->>'task_path') AS task_path,
 			status,
 			attempts,
 			max_attempts,
@@ -114,7 +114,7 @@ func (s *Service) InspectFailedTask(ctx context.Context, resultID int64) (*Faile
 		SELECT
 			result_id,
 			queue_name,
-			spec_json->>'task_path' AS task_path,
+			COALESCE(task_path, spec_json->>'task_path') AS task_path,
 			status,
 			attempts,
 			max_attempts,

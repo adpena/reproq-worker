@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -43,7 +42,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	defer cancel()
 
 	args := []string{"-m", e.ExecutorModule, "--result-id", fmt.Sprintf("%d", resultID), "--attempt", fmt.Sprintf("%d", attempt)}
-	
+
 	var tempFile *os.File
 	var err error
 
@@ -95,24 +94,25 @@ func (e *ShellExecutor) Execute(ctx context.Context, resultID int64, attempt int
 	}
 
 	err = cmd.Wait()
-	
+
 	// Process Cleanup
 	if ctx.Err() == context.DeadlineExceeded {
 		terminateProcessGroup(cmd)
 		return nil, stdoutBuf.String(), stderrBuf.String(), context.DeadlineExceeded
 	}
 
-	stdoutStr := strings.TrimSpace(stdoutBuf.String())
+	stdoutBytes := bytes.TrimSpace(stdoutBuf.Bytes())
+	stdoutStr := string(stdoutBytes)
 	stderrStr := stderrBuf.String()
 
 	// Strict JSON Parsing
 	var env ResultEnvelope
-	if err := json.Unmarshal([]byte(stdoutStr), &env); err != nil {
+	if err := json.Unmarshal(stdoutBytes, &env); err != nil {
 		return &ResultEnvelope{
-			Ok:      false,
-			Message: fmt.Sprintf("Invalid JSON on stdout: %v", err),
-		},
-		stdoutStr, stderrStr, nil
+				Ok:      false,
+				Message: fmt.Sprintf("Invalid JSON on stdout: %v", err),
+			},
+			stdoutStr, stderrStr, nil
 	}
 
 	return &env, stdoutStr, stderrStr, nil
@@ -149,6 +149,10 @@ func (b *boundedBuffer) String() string {
 	return s
 }
 
+func (b *boundedBuffer) Bytes() []byte {
+	return b.buf.Bytes()
+}
+
 type MockExecutor struct {
 	Sleep time.Duration
 }
@@ -158,8 +162,6 @@ func (m *MockExecutor) Execute(ctx context.Context, resultID int64, attempt int,
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 
 	defer cancel()
-
-
 
 	select {
 

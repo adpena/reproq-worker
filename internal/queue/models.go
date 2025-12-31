@@ -23,6 +23,7 @@ type TaskRun struct {
 	RunAfter        *time.Time      `db:"run_after"`
 	SpecJSON        json.RawMessage `db:"spec_json"`
 	SpecHash        string          `db:"spec_hash"`
+	TaskPath        *string         `db:"task_path"`
 	Status          TaskStatus      `db:"status"`
 	EnqueuedAt      time.Time       `db:"enqueued_at"`
 	StartedAt       *time.Time      `db:"started_at"`

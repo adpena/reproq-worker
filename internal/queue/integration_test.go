@@ -34,14 +34,15 @@ func TestQueueIntegration(t *testing.T) {
 	s := NewService(pool)
 
 	// 1. Enqueue Task
+	taskPath := "myapp.tasks.test"
 	specJSON := `{"task_path": "myapp.tasks.test", "args": [1], "kwargs": {}}`
 	specHash := "testhash64000000000000000000000000000000000000000000000000000000" // 64 chars
 	var resultID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', $2, 'READY', NOW())
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, task_path)
+		VALUES ($1, 'default', $2, 'READY', NOW(), $3)
 		RETURNING result_id
-	`, specHash, specJSON).Scan(&resultID)
+	`, specHash, specJSON, taskPath).Scan(&resultID)
 	if err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
@@ -57,6 +58,9 @@ func TestQueueIntegration(t *testing.T) {
 	}
 	if task.LeasedBy == nil || *task.LeasedBy != workerID {
 		t.Errorf("expected leased_by %s, got %v", workerID, task.LeasedBy)
+	}
+	if task.TaskPath == nil || *task.TaskPath != taskPath {
+		t.Errorf("expected task_path %s, got %v", taskPath, task.TaskPath)
 	}
 
 	// 3. Heartbeat
@@ -102,7 +106,7 @@ func TestRetryLifecycle(t *testing.T) {
 	specHash := "retryhash" + strings.Repeat("0", 55)
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), 2)
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.retry"}', 'READY', NOW(), 2)
 		RETURNING result_id
 	`, specHash).Scan(&id)
 	if err != nil {
@@ -166,7 +170,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 	var lowID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), 10, NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
 		RETURNING result_id
 	`, "aging_high"+strings.Repeat("1", 54)).Scan(&highID)
 	if err != nil {
@@ -174,7 +178,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 	}
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
 		RETURNING result_id
 	`, "aging_low"+strings.Repeat("2", 55)).Scan(&lowID)
 	if err != nil {
@@ -195,7 +199,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 	// Case 2: Aging enabled, older low-priority wins.
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), 10, NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
 		RETURNING result_id
 	`, "aging_high2"+strings.Repeat("3", 53)).Scan(&highID)
 	if err != nil {
@@ -203,7 +207,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 	}
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
 		RETURNING result_id
 	`, "aging_low2"+strings.Repeat("4", 54)).Scan(&lowID)
 	if err != nil {
@@ -236,19 +240,20 @@ func TestRateLimitingClaim(t *testing.T) {
 	pool.Exec(ctx, "DELETE FROM rate_limits")
 	s := NewService(pool)
 
+	taskPath := "myapp.tasks.rate"
 	specJSON := `{"task_path":"myapp.tasks.rate","args":[],"kwargs":{}}`
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', $2, 'READY', NOW(), 0, NOW())
-	`, "rate_limit"+strings.Repeat("5", 54), specJSON)
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at, task_path)
+		VALUES ($1, 'default', $2, 'READY', NOW(), 0, NOW(), $3)
+	`, "rate_limit"+strings.Repeat("5", 54), specJSON, taskPath)
 	if err != nil {
 		t.Fatalf("failed to enqueue task: %v", err)
 	}
 
-	// No tokens available -> claim should skip.
+	// Task rate limit takes precedence over queue/global.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO rate_limits (key, tokens_per_second, burst_size, current_tokens, last_refilled_at)
-		VALUES ('queue:default', 1, 1, 0, NOW())
+		VALUES ('task:myapp.tasks.rate', 1, 1, 0, NOW())
 	`)
 	if err != nil {
 		t.Fatalf("failed to insert rate limit: %v", err)
@@ -266,7 +271,7 @@ func TestRateLimitingClaim(t *testing.T) {
 	_, err = pool.Exec(ctx, `
 		UPDATE rate_limits
 		SET current_tokens = 1, last_refilled_at = NOW()
-		WHERE key = 'queue:default'
+		WHERE key = 'task:myapp.tasks.rate'
 	`)
 	if err != nil {
 		t.Fatalf("failed to update rate limit: %v", err)
@@ -278,7 +283,7 @@ func TestRateLimitingClaim(t *testing.T) {
 	}
 
 	var tokens float64
-	err = pool.QueryRow(ctx, "SELECT current_tokens FROM rate_limits WHERE key = 'queue:default'").Scan(&tokens)
+	err = pool.QueryRow(ctx, "SELECT current_tokens FROM rate_limits WHERE key = 'task:myapp.tasks.rate'").Scan(&tokens)
 	if err != nil {
 		t.Fatalf("failed to read tokens: %v", err)
 	}
@@ -310,7 +315,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 	var id2 int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
-		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW())
 		RETURNING result_id
 	`, "wf1"+strings.Repeat("a", 61), workflowID).Scan(&id1)
 	if err != nil {
@@ -318,7 +323,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 	}
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
-		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW())
 		RETURNING result_id
 	`, "wf2"+strings.Repeat("b", 61), workflowID).Scan(&id2)
 	if err != nil {
@@ -328,7 +333,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 	var callbackID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, wait_count)
-		VALUES ($1, 'default', '{}', 'WAITING', NOW(), $2, 2)
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'WAITING', NOW(), $2, 2)
 		RETURNING result_id
 	`, "wf_cb"+strings.Repeat("c", 59), workflowID).Scan(&callbackID)
 	if err != nil {
@@ -518,7 +523,7 @@ func TestRequestCancel(t *testing.T) {
 	specHash := "cancelhash" + strings.Repeat("0", 54)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{}', 'READY', NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.cancel"}', 'READY', NOW())
 	`, specHash)
 	if err != nil {
 		t.Fatalf("failed to insert task: %v", err)
@@ -663,7 +668,7 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 	var resultID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{}', 'READY', NOW())
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.logs"}', 'READY', NOW())
 		RETURNING result_id
 	`, specHash).Scan(&resultID)
 	if err != nil {
@@ -776,7 +781,7 @@ func TestPruneExpired(t *testing.T) {
 	var expiredReadyID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), NOW() - INTERVAL '1 hour')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() - INTERVAL '1 hour')
 		RETURNING result_id
 	`, "expiredready"+strings.Repeat("5", 52)).Scan(&expiredReadyID)
 	if err != nil {
@@ -786,7 +791,7 @@ func TestPruneExpired(t *testing.T) {
 	var expiredSuccessID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{}', 'SUCCESSFUL', NOW(), NOW() - INTERVAL '2 hours')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'SUCCESSFUL', NOW(), NOW() - INTERVAL '2 hours')
 		RETURNING result_id
 	`, "expiredsuccess"+strings.Repeat("6", 50)).Scan(&expiredSuccessID)
 	if err != nil {
@@ -796,7 +801,7 @@ func TestPruneExpired(t *testing.T) {
 	var futureID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{}', 'READY', NOW(), NOW() + INTERVAL '1 hour')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() + INTERVAL '1 hour')
 		RETURNING result_id
 	`, "futuretask"+strings.Repeat("7", 54)).Scan(&futureID)
 	if err != nil {
@@ -806,7 +811,7 @@ func TestPruneExpired(t *testing.T) {
 	var runningID int64
 	err = pool.QueryRow(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at, leased_by)
-		VALUES ($1, 'default', '{}', 'RUNNING', NOW(), NOW() - INTERVAL '1 hour', 'w1')
+		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'RUNNING', NOW(), NOW() - INTERVAL '1 hour', 'w1')
 		RETURNING result_id
 	`, "runningtask"+strings.Repeat("8", 53)).Scan(&runningID)
 	if err != nil {

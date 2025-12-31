@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,11 +70,13 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 
 	if r.cfg.ReclaimIntervalSeconds > 0 {
+		reclaimStart := time.Now()
 		if reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault); err != nil {
 			r.logger.Warn("Failed to reclaim expired tasks", "error", err)
 		} else if reclaimed > 0 {
 			r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
 		}
+		dbOpDuration.WithLabelValues("reclaim").Observe(time.Since(reclaimStart).Seconds())
 
 		go func() {
 			ticker := time.NewTicker(time.Duration(r.cfg.ReclaimIntervalSeconds) * time.Second)
@@ -83,12 +86,14 @@ func (r *Runner) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					reclaimStart := time.Now()
 					reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault)
 					if err != nil {
 						r.logger.Warn("Failed to reclaim expired tasks", "error", err)
 					} else if reclaimed > 0 {
 						r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
 					}
+					dbOpDuration.WithLabelValues("reclaim").Observe(time.Since(reclaimStart).Seconds())
 				}
 			}
 		}()
@@ -154,7 +159,9 @@ func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {
 			r.cfg.LeaseSeconds,
 			r.cfg.PriorityAgingFactor,
 		)
-		claimDuration.WithLabelValues(queueName).Observe(time.Since(claimStart).Seconds())
+		claimElapsed := time.Since(claimStart)
+		claimDuration.WithLabelValues(queueName).Observe(claimElapsed.Seconds())
+		dbOpDuration.WithLabelValues("claim").Observe(claimElapsed.Seconds())
 		if err == nil {
 			r.queueIdx = (idx + 1) % len(r.cfg.QueueNames)
 			tasksClaimed.WithLabelValues(queueName).Inc()
@@ -192,8 +199,24 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 
 	logger := r.logger.With("result_id", task.ResultID, "spec_hash", task.SpecHash)
 
-	specTaskPath, err := r.extractTaskPath(task.SpecJSON)
-	if err != nil {
+	specTaskPath := ""
+	if task.TaskPath != nil && *task.TaskPath != "" {
+		specTaskPath = *task.TaskPath
+	} else {
+		var err error
+		specTaskPath, err = r.extractTaskPath(task.SpecJSON)
+		if err != nil {
+			logger.Error("Invalid task spec", "error", err)
+			completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer compCancel()
+			r.failTask(completionCtx, task, err, "invalid_spec", "", false)
+			tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
+			tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+			return
+		}
+	}
+	if specTaskPath == "" {
+		err := errors.New("task_path missing")
 		logger.Error("Invalid task spec", "error", err)
 		completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer compCancel()
@@ -229,7 +252,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 				case <-execCtx.Done():
 					return
 				case <-ticker.C:
+					heartbeatStart := time.Now()
 					cancelled, err := r.queue.Heartbeat(ctx, task.ResultID, r.cfg.WorkerID, r.cfg.LeaseSeconds)
+					dbOpDuration.WithLabelValues("heartbeat").Observe(time.Since(heartbeatStart).Seconds())
 					if err != nil {
 						logger.Error("Heartbeat failed", "error", err)
 						cancel() // Stop execution
@@ -265,7 +290,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":        time.Now(),
 			"worker_id": r.cfg.WorkerID,
 		})
+		completeStart := time.Now()
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, false, time.Now(), logsURI)
+		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		return
@@ -279,7 +306,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"message": err.Error(),
 			"at":      time.Now(),
 		})
+		completeStart := time.Now()
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI)
+		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		return
 	}
@@ -288,7 +317,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		logger.Info("Task successful")
 		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
 		tasksCompleted.WithLabelValues(task.QueueName, "success").Inc()
+		completeStart := time.Now()
 		r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI)
+		dbOpDuration.WithLabelValues("complete_success").Observe(time.Since(completeStart).Seconds())
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
 		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
@@ -319,7 +350,9 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 		}
 
 		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
+		completeStart := time.Now()
 		r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI)
+		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 	}
 }
 
@@ -351,7 +384,9 @@ func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, k
 		payload["task_path"] = taskPath
 	}
 	errObj, _ := json.Marshal(payload)
+	completeStart := time.Now()
 	_ = r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now(), nil)
+	dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
 }
 
 func (r *Runner) persistExecutionLogs(task *queue.TaskRun, stdout string, stderr string) *string {
@@ -370,20 +405,36 @@ func (r *Runner) persistExecutionLogs(task *queue.TaskRun, stdout string, stderr
 	filename := fmt.Sprintf("task-%d-attempt-%d.log", task.ResultID, task.Attempts)
 	path := filepath.Join(r.cfg.LogsDir, filename)
 
-	var b strings.Builder
-	b.WriteString("STDOUT:\n")
-	b.WriteString(stdout)
-	if !strings.HasSuffix(stdout, "\n") {
-		b.WriteString("\n")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		r.logger.Warn("Failed to open logs file", "error", err, "path", path)
+		return nil
 	}
-	b.WriteString("STDERR:\n")
-	b.WriteString(stderr)
-	if !strings.HasSuffix(stderr, "\n") {
-		b.WriteString("\n")
-	}
+	defer file.Close()
 
-	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+	writer := bufio.NewWriter(file)
+	_, err = writer.WriteString("STDOUT:\n")
+	if err == nil {
+		_, err = writer.WriteString(stdout)
+	}
+	if err == nil && !strings.HasSuffix(stdout, "\n") {
+		_, err = writer.WriteString("\n")
+	}
+	if err == nil {
+		_, err = writer.WriteString("STDERR:\n")
+	}
+	if err == nil {
+		_, err = writer.WriteString(stderr)
+	}
+	if err == nil && !strings.HasSuffix(stderr, "\n") {
+		_, err = writer.WriteString("\n")
+	}
+	if err != nil {
 		r.logger.Warn("Failed to persist task logs", "error", err, "path", path)
+		return nil
+	}
+	if err := writer.Flush(); err != nil {
+		r.logger.Warn("Failed to flush task logs", "error", err, "path", path)
 		return nil
 	}
 

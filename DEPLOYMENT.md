@@ -43,7 +43,18 @@ The `.github/workflows/release.yml` should be implemented to:
 3.  Create a GitHub Release and upload all files from `dist/` as assets.
 
 ## 4. Database Migrations
-If you manage the schema directly from this repo, apply the SQL migrations in order.
+If you manage the schema directly from this repo, apply the baseline SQL migration:
+
+```bash
+psql "$DATABASE_URL" -f migrations/000001_baseline.up.sql
+```
+
+Notes:
+- The baseline uses `CREATE INDEX CONCURRENTLY`, so run it outside a transaction wrapper.
+- The `task_runs_task_path_not_empty` check is created as `NOT VALID` to avoid long table locks.
+  Validate it after backfilling `task_path` with:
+  `ALTER TABLE task_runs VALIDATE CONSTRAINT task_runs_task_path_not_empty;`
+- For existing data, backfill in batches (for example using `result_id` windows) before validating.
 
 ## 5. Production Supervision
 The preferred method for managing Reproq in production is using **systemd**.

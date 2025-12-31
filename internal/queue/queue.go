@@ -31,11 +31,11 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 	if priorityAgingFactor > 0 {
 		query = `
 			WITH candidate AS (
-				SELECT result_id, spec_json
+				SELECT result_id, task_path
 				FROM task_runs
 				WHERE status = 'READY'
 				  AND queue_name = $1
-				  AND (run_after IS NULL OR run_after <= NOW())
+				  AND COALESCE(run_after, '-infinity'::timestamptz) <= NOW()
 				  AND (
 					lock_key IS NULL
 					OR NOT EXISTS (
@@ -57,7 +57,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 				  AND rl.tokens_per_second > 0
 				  AND rl.burst_size > 0
 				  AND rl.key = COALESCE(
-					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
+					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT task_path FROM candidate)),
 					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),
 					(SELECT key FROM rate_limits WHERE key = 'global')
 				  )
@@ -87,21 +87,19 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			FROM target
 			WHERE task_runs.result_id = target.result_id
 			RETURNING
-				task_runs.result_id, backend_alias, queue_name, priority, run_after,
-				spec_json, spec_hash, status, enqueued_at, started_at,
-				last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
-				lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
-				logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
+				task_runs.result_id, queue_name, priority, spec_json, spec_hash,
+				status, enqueued_at, attempts, max_attempts, timeout_seconds,
+				lock_key, leased_until, leased_by, task_path
 		`
 		args = []interface{}{queueName, priorityAgingFactor, leasedUntil, workerID}
 	} else {
 		query = `
 			WITH candidate AS (
-				SELECT result_id, spec_json
+				SELECT result_id, task_path
 				FROM task_runs
 				WHERE status = 'READY'
 				  AND queue_name = $1
-				  AND (run_after IS NULL OR run_after <= NOW())
+				  AND COALESCE(run_after, '-infinity'::timestamptz) <= NOW()
 				  AND (
 					lock_key IS NULL 
 					OR NOT EXISTS (
@@ -121,7 +119,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 				  AND rl.tokens_per_second > 0
 				  AND rl.burst_size > 0
 				  AND rl.key = COALESCE(
-					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT spec_json->>'task_path' FROM candidate)),
+					(SELECT key FROM rate_limits WHERE key = 'task:' || (SELECT task_path FROM candidate)),
 					(SELECT key FROM rate_limits WHERE key = 'queue:' || $1),
 					(SELECT key FROM rate_limits WHERE key = 'global')
 				  )
@@ -151,22 +149,18 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			FROM target
 			WHERE task_runs.result_id = target.result_id
 			RETURNING 
-				task_runs.result_id, backend_alias, queue_name, priority, run_after,
-				spec_json, spec_hash, status, enqueued_at, started_at,
-				last_attempted_at, finished_at, attempts, max_attempts, timeout_seconds,
-				lock_key, worker_ids, return_json, errors_json, leased_until, leased_by,
-				logs_uri, artifacts_uri, expires_at, created_at, updated_at, cancel_requested
+				task_runs.result_id, queue_name, priority, spec_json, spec_hash,
+				status, enqueued_at, attempts, max_attempts, timeout_seconds,
+				lock_key, leased_until, leased_by, task_path
 		`
 		args = []interface{}{queueName, leasedUntil, workerID}
 	}
 
 	var t TaskRun
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&t.ResultID, &t.BackendAlias, &t.QueueName, &t.Priority, &t.RunAfter,
-		&t.SpecJSON, &t.SpecHash, &t.Status, &t.EnqueuedAt, &t.StartedAt,
-		&t.LastAttemptedAt, &t.FinishedAt, &t.Attempts, &t.MaxAttempts, &t.TimeoutSeconds,
-		&t.LockKey, &t.WorkerIDs, &t.ReturnJSON, &t.ErrorsJSON, &t.LeasedUntil, &t.LeasedBy,
-		&t.LogsURI, &t.ArtifactsURI, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt, &t.CancelRequested,
+		&t.ResultID, &t.QueueName, &t.Priority, &t.SpecJSON, &t.SpecHash,
+		&t.Status, &t.EnqueuedAt, &t.Attempts, &t.MaxAttempts, &t.TimeoutSeconds,
+		&t.LockKey, &t.LeasedUntil, &t.LeasedBy, &t.TaskPath,
 	)
 
 	if err != nil {
