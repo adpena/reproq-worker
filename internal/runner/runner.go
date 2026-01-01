@@ -420,6 +420,9 @@ func (r *Runner) publishEvent(level, eventType, message string, task *queue.Task
 	if task.MaxAttempts > 0 {
 		metadata["max_attempts"] = strconv.Itoa(task.MaxAttempts)
 	}
+	if _, ok := metadata["role"]; !ok && r.cfg.ProcessRole != "" {
+		metadata["role"] = r.cfg.ProcessRole
+	}
 	r.publisher.Publish(events.Event{
 		Timestamp: time.Now(),
 		Level:     level,

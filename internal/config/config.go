@@ -14,6 +14,8 @@ type Config struct {
 
 	WorkerID string
 
+	ProcessRole string
+
 	Version string
 
 	QueueNames []string
@@ -62,6 +64,8 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&c.WorkerID, "worker-id", c.WorkerID, "Unique worker ID")
 
+	fs.StringVar(&c.ProcessRole, "process-role", c.ProcessRole, "Process role label for event metadata")
+
 	fs.Var(&stringSliceFlag{target: &c.QueueNames, parser: parseQueueList}, "queues", "Comma-separated queue names")
 
 	fs.Var(&stringSliceFlag{target: &c.AllowedTaskModules, parser: parseCommaList}, "allowed-task-modules", "Comma-separated allowed task module prefixes")
@@ -93,6 +97,8 @@ func DefaultConfig() *Config {
 		DatabaseURL: "",
 
 		WorkerID: workerID,
+
+		ProcessRole: "worker",
 
 		QueueNames: []string{"default"},
 
@@ -143,6 +149,10 @@ func ApplyEnv(c *Config) error {
 
 	if val := os.Getenv("WORKER_ID"); val != "" {
 		c.WorkerID = val
+	}
+
+	if val := os.Getenv("REPROQ_PROCESS_ROLE"); val != "" {
+		c.ProcessRole = val
 	}
 
 	if val := os.Getenv("QUEUE_NAMES"); val != "" {

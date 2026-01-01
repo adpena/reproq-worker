@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"reproq-worker/internal/config"
+	"reproq-worker/internal/events"
 	"reproq-worker/internal/executor"
 	"reproq-worker/internal/queue"
 )
@@ -101,6 +102,14 @@ type recordingExecutor struct {
 func (r *recordingExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	r.called = true
 	return nil, "", "", nil
+}
+
+type recordingPublisher struct {
+	last events.Event
+}
+
+func (r *recordingPublisher) Publish(event events.Event) {
+	r.last = event
 }
 
 type cancelQueue struct {
@@ -218,6 +227,25 @@ func TestRunnerRegistersVersion(t *testing.T) {
 	}
 	if q.registeredVersion != cfg.Version {
 		t.Fatalf("expected version %q, got %q", cfg.Version, q.registeredVersion)
+	}
+}
+
+func TestPublishEventAddsRoleMetadata(t *testing.T) {
+	publisher := &recordingPublisher{}
+	r := &Runner{
+		cfg: &config.Config{
+			WorkerID:    "worker-1",
+			ProcessRole: "worker",
+		},
+		publisher: publisher,
+	}
+	task := &queue.TaskRun{
+		ResultID:  42,
+		QueueName: "default",
+	}
+	r.publishEvent("info", "task_started", "task started", task, "tasks.example", nil)
+	if got := publisher.last.Metadata["role"]; got != "worker" {
+		t.Fatalf("expected role metadata to be set, got %q", got)
 	}
 }
 

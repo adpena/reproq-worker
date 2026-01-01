@@ -153,6 +153,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 | `--config` | `REPROQ_CONFIG` | - | Path to a YAML/TOML config file. |
 | `--dsn` | `DATABASE_URL` | - | PostgreSQL connection string. Required unless set in `DATABASE_URL` or the config file. |
 | `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique identifier for this worker node. Used for heartbeats. |
+| `--process-role` | `REPROQ_PROCESS_ROLE` | `worker` | Role label added to event metadata (for example: `worker`, `beat`). |
 | `--queues` | `QUEUE_NAMES` | `default` | Comma-separated list of queue names to poll. |
 | `--allowed-task-modules` | `ALLOWED_TASK_MODULES` | `myapp.tasks.,tasks.` | Comma-separated allow-list of task module prefixes (`*` disables validation; dev only). |
 | `--logs-dir` | `REPROQ_LOGS_DIR` | - | Directory to persist stdout/stderr logs (updates `logs_uri`). |
@@ -177,6 +178,7 @@ Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `ME
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).
 Set `LOW_MEMORY_MODE=1` to skip the metrics/health/events server and the metrics collector.
 Set `REPROQ_MEMORY_LOG_INTERVAL=60s` to emit periodic memory stats (includes RSS on Linux).
+Set `REPROQ_PROCESS_ROLE` to label events in the `/events` stream (useful when multiple roles share a host).
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
 Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
 When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.

@@ -8,6 +8,8 @@ worker:
   # Optional DSN override for the worker.
   dsn: ""
   worker_id: "worker-1"
+  # Optional role label for event metadata.
+  process_role: "worker"
   queues:
     - default
     - high

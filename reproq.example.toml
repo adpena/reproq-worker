@@ -8,6 +8,7 @@ dsn = "postgres://user:pass@localhost:5432/reproq?sslmode=disable"
 # Optional DSN override for the worker.
 dsn = ""
 worker_id = "worker-1"
+process_role = "worker"
 queues = ["default", "high"]
 allowed_task_modules = ["myapp.tasks.", "tasks."]
 # Use ["*"] to disable task module validation (dev only).

@@ -72,6 +72,7 @@ func TestApplyFileConfigOverrides(t *testing.T) {
 	cfg := DefaultConfig()
 	fileCfg := &FileConfig{
 		Worker: WorkerFileConfig{
+			ProcessRole:         "scheduler",
 			Queues:              []string{"alpha", "beta"},
 			Concurrency:         intPtr(3),
 			PollMinBackoff:      "150ms",
@@ -99,6 +100,9 @@ func TestApplyFileConfigOverrides(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != 12*time.Second {
 		t.Fatalf("expected shutdown timeout 12s, got %v", cfg.ShutdownTimeout)
+	}
+	if cfg.ProcessRole != "scheduler" {
+		t.Fatalf("expected process role scheduler, got %q", cfg.ProcessRole)
 	}
 	if cfg.PriorityAgingFactor != 120.0 {
 		t.Fatalf("expected priority aging 120, got %v", cfg.PriorityAgingFactor)

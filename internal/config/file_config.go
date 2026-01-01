@@ -30,6 +30,7 @@ type FileConfig struct {
 type WorkerFileConfig struct {
 	DSN                    string   `yaml:"dsn" toml:"dsn"`
 	WorkerID               string   `yaml:"worker_id" toml:"worker_id"`
+	ProcessRole            string   `yaml:"process_role" toml:"process_role"`
 	Queues                 []string `yaml:"queues" toml:"queues"`
 	AllowedTaskModules     []string `yaml:"allowed_task_modules" toml:"allowed_task_modules"`
 	Concurrency            *int     `yaml:"concurrency" toml:"concurrency"`
@@ -128,6 +129,9 @@ func ApplyFileConfig(cfg *Config, fileCfg *FileConfig) error {
 	}
 	if fileCfg.Worker.WorkerID != "" {
 		cfg.WorkerID = fileCfg.Worker.WorkerID
+	}
+	if fileCfg.Worker.ProcessRole != "" {
+		cfg.ProcessRole = fileCfg.Worker.ProcessRole
 	}
 	if len(fileCfg.Worker.Queues) > 0 {
 		cfg.QueueNames = append([]string{}, fileCfg.Worker.Queues...)
