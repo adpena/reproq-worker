@@ -39,6 +39,14 @@ var (
 		Name: "reproq_concurrency_limit",
 		Help: "Total concurrency capacity across workers.",
 	})
+	pausedQueuesGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "reproq_queues_paused",
+		Help: "Number of paused queues.",
+	})
+	concurrencyBlockedGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "reproq_concurrency_blocked_tasks",
+		Help: "Number of READY tasks blocked by concurrency limits.",
+	})
 )
 
 func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Duration, logger *slog.Logger) {
@@ -53,6 +61,12 @@ func StartCollector(ctx context.Context, pool *pgxpool.Pool, interval time.Durat
 			}
 			if err := collectWorkerMetrics(ctx, pool); err != nil {
 				logWarn(logger, "Worker metrics collection failed", err)
+			}
+			if err := collectQueueControlMetrics(ctx, pool); err != nil {
+				logWarn(logger, "Queue control metrics collection failed", err)
+			}
+			if err := collectConcurrencyBlockedMetrics(ctx, pool); err != nil {
+				logWarn(logger, "Concurrency metrics collection failed", err)
 			}
 			collectSystemMetrics()
 			collectPoolMetrics(pool)
@@ -149,6 +163,49 @@ func collectWorkerMetrics(ctx context.Context, pool *pgxpool.Pool) error {
 
 	workerCountGauge.Set(float64(workers))
 	concurrencyLimitGauge.Set(float64(concurrency))
+	return nil
+}
+
+func collectQueueControlMetrics(ctx context.Context, pool *pgxpool.Pool) error {
+	queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	var paused int64
+	if err := pool.QueryRow(queryCtx, `
+		SELECT COUNT(*)
+		FROM reproq_queue_controls
+		WHERE paused = TRUE
+	`).Scan(&paused); err != nil {
+		return err
+	}
+
+	pausedQueuesGauge.Set(float64(paused))
+	return nil
+}
+
+func collectConcurrencyBlockedMetrics(ctx context.Context, pool *pgxpool.Pool) error {
+	queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	var blocked int64
+	if err := pool.QueryRow(queryCtx, `
+		WITH running AS (
+			SELECT concurrency_key, COUNT(*) AS running_count
+			FROM task_runs
+			WHERE status = 'RUNNING' AND concurrency_key IS NOT NULL
+			GROUP BY concurrency_key
+		)
+		SELECT COUNT(*)
+		FROM task_runs tr
+		JOIN running r ON r.concurrency_key = tr.concurrency_key
+		WHERE tr.status = 'READY'
+		  AND tr.concurrency_limit > 0
+		  AND r.running_count >= tr.concurrency_limit
+	`).Scan(&blocked); err != nil {
+		return err
+	}
+
+	concurrencyBlockedGauge.Set(float64(blocked))
 	return nil
 }
 

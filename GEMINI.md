@@ -69,12 +69,15 @@ go build -o reproq ./cmd/reproq
 - Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).
 - Worker registration uses the CLI `Version` constant.
 - Config reads `DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
+- Claiming respects `reproq_queue_controls` (paused queues) and `concurrency_key`/`concurrency_limit`.
+- Periodic payloads may be stored as `{"args": [...], "kwargs": {...}}` for recurring schedules.
 
 ## Reliability Invariants
 - **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
 - **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `READY`.
 - **Concurrency Guard**: Dedupes via `spec_hash` checks before enqueue; a partial unique index can reinforce this in Postgres.
+- **Concurrency Limits**: Enforced at claim time via `concurrency_key` + `concurrency_limit`.
 
 ### Security Posture
 - **Validation**: All task module paths must be validated against an allow-list in `internal/executor/validator.go`.

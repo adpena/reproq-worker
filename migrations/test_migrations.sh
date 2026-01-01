@@ -22,7 +22,7 @@ echo "✅ All migrations applied successfully."
 # Verify tables exist
 TABLES=$(psql "$DATABASE_URL" -t -c "\dt" | awk '{print $3}')
 
-REQUIRED=("task_runs" "periodic_tasks" "reproq_workers")
+REQUIRED=("task_runs" "periodic_tasks" "reproq_workers" "reproq_queue_controls")
 
 for t in "${REQUIRED[@]}"; do
     if [[ ! " $TABLES " =~ " $t " ]]; then

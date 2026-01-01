@@ -78,7 +78,9 @@ Starts the periodic task scheduler. **Run only one instance per database.**
 
 ```bash
 ./reproq beat --dsn "postgres://..." --interval 30s
+./reproq beat --dsn "postgres://..." --once
 ```
+Use `--once` for cron-driven or low-memory environments.
 
 ### `replay`
 Manually re-enqueues a task by result ID or spec hash (latest match).
@@ -199,6 +201,7 @@ Config files can also set fields that do not have CLI flags, including poll back
 | Flag | Default | Description |
 | :--- | :--- | :--- |
 | `--interval` | `30s` | How often the scheduler checks for due periodic tasks. |
+| `--once` | `false` | Enqueue due tasks once and exit. |
 
 ---
 
@@ -218,7 +221,8 @@ Config files can also set fields that do not have CLI flags, including poll back
 The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 1. **Priority**: High priority tasks are claimed first.
 2. **FIFO**: Among equal priority, older tasks (`enqueued_at`) are claimed first.
-3. **Concurrency Control**: It respects `lock_key`. If a task with `lock_key="A"` is `RUNNING`, no other task with `lock_key="A"` will be claimed.
+3. **Concurrency Control**: It respects `lock_key` plus `concurrency_key`/`concurrency_limit` caps.
+4. **Queue Pauses**: It skips queues marked paused in `reproq_queue_controls`.
 
 ### Heartbeats & Recovery
 - **Heartbeat**: While a task runs, the worker updates its `leased_until` timestamp every `heartbeat-seconds`.

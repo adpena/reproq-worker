@@ -85,6 +85,85 @@ func TestQueueIntegration(t *testing.T) {
 	}
 }
 
+func TestQueuePausePreventsClaim(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("failed to connect to DB: %v", err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+	pool.Exec(ctx, "DELETE FROM reproq_queue_controls")
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO reproq_queue_controls (queue_name, paused, paused_at)
+		VALUES ('paused', TRUE, NOW())
+	`)
+	if err != nil {
+		t.Fatalf("failed to pause queue: %v", err)
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
+		VALUES ($1, 'paused', '{"task_path":"myapp.tasks.pause","args":[],"kwargs":{}}', 'READY', NOW())
+	`, "pausehash"+strings.Repeat("0", 56))
+	if err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	s := NewService(pool)
+	_, err = s.Claim(ctx, "w1", "paused", 60, 0)
+	if !errors.Is(err, ErrNoTasks) {
+		t.Fatalf("expected ErrNoTasks for paused queue, got %v", err)
+	}
+}
+
+func TestConcurrencyLimitBlocksClaim(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("failed to connect to DB: %v", err)
+	}
+	defer pool.Close()
+
+	pool.Exec(ctx, "DELETE FROM task_runs")
+
+	specJSON := `{"task_path":"myapp.tasks.limit","args":[],"kwargs":{}}`
+	_, err = pool.Exec(ctx, `
+		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, concurrency_key, concurrency_limit)
+		VALUES ($1, 'default', $2, 'READY', NOW(), 'user:1', 1),
+		       ($3, 'default', $2, 'READY', NOW(), 'user:1', 1)
+	`, "limit1"+strings.Repeat("0", 58), specJSON, "limit2"+strings.Repeat("1", 58))
+	if err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	s := NewService(pool)
+	task, err := s.Claim(ctx, "w1", "default", 60, 0)
+	if err != nil {
+		t.Fatalf("failed to claim first task: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected first task, got nil")
+	}
+
+	_, err = s.Claim(ctx, "w2", "default", 60, 0)
+	if !errors.Is(err, ErrNoTasks) {
+		t.Fatalf("expected ErrNoTasks due to concurrency limit, got %v", err)
+	}
+}
+
 func TestRetryLifecycle(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -435,7 +514,7 @@ func TestPeriodicTasks(t *testing.T) {
 		Name:        "test_pt",
 		CronExpr:    "* * * * *",
 		TaskPath:    "myapp.pt",
-		PayloadJSON: json.RawMessage(`{"a": 1}`),
+		PayloadJSON: json.RawMessage(`{"args":[1],"kwargs":{"a":1}}`),
 		QueueName:   "default",
 		Priority:    0,
 		MaxAttempts: 3,

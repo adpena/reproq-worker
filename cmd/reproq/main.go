@@ -375,6 +375,7 @@ func runBeat(args []string) {
 	fs.String("config", configPath, "Path to reproq config file")
 	dsn := fs.String("dsn", beatDSN, "Postgres DSN")
 	interval := fs.Duration("interval", beatInterval, "Polling interval for periodic tasks")
+	once := fs.Bool("once", false, "Enqueue due tasks once and exit")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -403,6 +404,10 @@ func runBeat(args []string) {
 		fmt.Printf("Error: %v\n", err)
 	} else if n > 0 {
 		fmt.Printf("Enqueued %d periodic tasks\n", n)
+	}
+	if *once {
+		fmt.Println("Beat run complete (--once).")
+		return
 	}
 
 	for {

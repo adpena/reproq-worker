@@ -19,9 +19,12 @@ CREATE TABLE task_runs (
     max_attempts INTEGER NOT NULL DEFAULT 3,
     timeout_seconds INTEGER NOT NULL DEFAULT 900,
     lock_key TEXT,
+    concurrency_key TEXT,
+    concurrency_limit INTEGER NOT NULL DEFAULT 0,
     worker_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     return_json JSONB,
     errors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     last_error TEXT,
     failed_at TIMESTAMPTZ,
     leased_until TIMESTAMPTZ,
@@ -49,6 +52,10 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_runs_lock_key
 ON task_runs (lock_key)
 WHERE status = 'RUNNING';
 
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_runs_concurrency_active
+ON task_runs (concurrency_key, leased_until)
+WHERE status = 'RUNNING' AND concurrency_key IS NOT NULL;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_runs_parent_id
 ON task_runs (parent_id)
 WHERE status = 'WAITING';
@@ -75,6 +82,8 @@ CREATE TABLE periodic_tasks (
     queue_name TEXT NOT NULL DEFAULT 'default',
     priority INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 3,
+    concurrency_key TEXT,
+    concurrency_limit INTEGER NOT NULL DEFAULT 0,
     last_run_at TIMESTAMPTZ,
     next_run_at TIMESTAMPTZ NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -85,6 +94,15 @@ CREATE TABLE periodic_tasks (
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_periodic_tasks_next_run
 ON periodic_tasks (next_run_at)
 WHERE enabled = TRUE;
+
+CREATE TABLE reproq_queue_controls (
+    queue_name TEXT PRIMARY KEY,
+    paused BOOLEAN NOT NULL DEFAULT FALSE,
+    paused_at TIMESTAMPTZ,
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE reproq_workers (
     worker_id TEXT PRIMARY KEY,

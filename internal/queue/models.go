@@ -33,10 +33,13 @@ type TaskRun struct {
 	MaxAttempts     int             `db:"max_attempts"`
 	TimeoutSeconds  int             `db:"timeout_seconds"`
 	LockKey         *string         `db:"lock_key"`
+	ConcurrencyKey  *string         `db:"concurrency_key"`
+	ConcurrencyLimit int            `db:"concurrency_limit"`
 	WorkerIDs       json.RawMessage `db:"worker_ids"`
 
 	ReturnJSON      json.RawMessage `db:"return_json"`
 	ErrorsJSON      json.RawMessage `db:"errors_json"`
+	MetadataJSON    json.RawMessage `db:"metadata_json"`
 	LeasedUntil     *time.Time      `db:"leased_until"`
 	LeasedBy        *string         `db:"leased_by"`
 	LogsURI         *string         `db:"logs_uri"`

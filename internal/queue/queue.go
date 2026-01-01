@@ -31,22 +31,37 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 	if priorityAgingFactor > 0 {
 		query = `
 			WITH candidate AS (
-				SELECT result_id, task_path
-				FROM task_runs
-				WHERE status = 'READY'
-				  AND queue_name = $1
-				  AND COALESCE(run_after, '-infinity'::timestamptz) <= NOW()
+				SELECT tr.result_id, tr.task_path
+				FROM task_runs tr
+				WHERE tr.status = 'READY'
+				  AND tr.queue_name = $1
+				  AND COALESCE(tr.run_after, '-infinity'::timestamptz) <= NOW()
+				  AND NOT EXISTS (
+					SELECT 1 FROM reproq_queue_controls qc
+					WHERE qc.queue_name = $1 AND qc.paused = TRUE
+				  )
 				  AND (
-					lock_key IS NULL
+					tr.lock_key IS NULL
 					OR NOT EXISTS (
-						SELECT 1 FROM task_runs
-						WHERE lock_key = task_runs.lock_key
-						  AND status = 'RUNNING'
+						SELECT 1 FROM task_runs tr_lock
+						WHERE tr_lock.lock_key = tr.lock_key
+						  AND tr_lock.status = 'RUNNING'
 					)
 				  )
+				  AND (
+					tr.concurrency_key IS NULL
+					OR tr.concurrency_key = ''
+					OR COALESCE(tr.concurrency_limit, 0) <= 0
+					OR (
+						SELECT COUNT(*)
+						FROM task_runs tr_run
+						WHERE tr_run.status = 'RUNNING'
+						  AND tr_run.concurrency_key = tr.concurrency_key
+					) < tr.concurrency_limit
+				  )
 				ORDER BY
-					(priority + (GREATEST(EXTRACT(EPOCH FROM (NOW() - enqueued_at)), 0) / $2)) DESC,
-					enqueued_at ASC
+					(tr.priority + (GREATEST(EXTRACT(EPOCH FROM (NOW() - tr.enqueued_at)), 0) / $2)) DESC,
+					tr.enqueued_at ASC
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			),
@@ -89,26 +104,41 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			RETURNING
 				task_runs.result_id, queue_name, priority, spec_json, spec_hash,
 				status, enqueued_at, attempts, max_attempts, timeout_seconds,
-				lock_key, leased_until, leased_by, task_path
+				lock_key, concurrency_key, concurrency_limit, leased_until, leased_by, task_path
 		`
 		args = []interface{}{queueName, priorityAgingFactor, leasedUntil, workerID}
 	} else {
 		query = `
 			WITH candidate AS (
-				SELECT result_id, task_path
-				FROM task_runs
-				WHERE status = 'READY'
-				  AND queue_name = $1
-				  AND COALESCE(run_after, '-infinity'::timestamptz) <= NOW()
+				SELECT tr.result_id, tr.task_path
+				FROM task_runs tr
+				WHERE tr.status = 'READY'
+				  AND tr.queue_name = $1
+				  AND COALESCE(tr.run_after, '-infinity'::timestamptz) <= NOW()
+				  AND NOT EXISTS (
+					SELECT 1 FROM reproq_queue_controls qc
+					WHERE qc.queue_name = $1 AND qc.paused = TRUE
+				  )
 				  AND (
-					lock_key IS NULL 
+					tr.lock_key IS NULL 
 					OR NOT EXISTS (
-						SELECT 1 FROM task_runs
-						WHERE lock_key = task_runs.lock_key 
-						  AND status = 'RUNNING'
+						SELECT 1 FROM task_runs tr_lock
+						WHERE tr_lock.lock_key = tr.lock_key 
+						  AND tr_lock.status = 'RUNNING'
 					)
 				  )
-				ORDER BY priority DESC, enqueued_at ASC
+				  AND (
+					tr.concurrency_key IS NULL
+					OR tr.concurrency_key = ''
+					OR COALESCE(tr.concurrency_limit, 0) <= 0
+					OR (
+						SELECT COUNT(*)
+						FROM task_runs tr_run
+						WHERE tr_run.status = 'RUNNING'
+						  AND tr_run.concurrency_key = tr.concurrency_key
+					) < tr.concurrency_limit
+				  )
+				ORDER BY tr.priority DESC, tr.enqueued_at ASC
 				LIMIT 1
 				FOR UPDATE SKIP LOCKED
 			),
@@ -151,7 +181,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			RETURNING 
 				task_runs.result_id, queue_name, priority, spec_json, spec_hash,
 				status, enqueued_at, attempts, max_attempts, timeout_seconds,
-				lock_key, leased_until, leased_by, task_path
+				lock_key, concurrency_key, concurrency_limit, leased_until, leased_by, task_path
 		`
 		args = []interface{}{queueName, leasedUntil, workerID}
 	}
@@ -160,7 +190,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&t.ResultID, &t.QueueName, &t.Priority, &t.SpecJSON, &t.SpecHash,
 		&t.Status, &t.EnqueuedAt, &t.Attempts, &t.MaxAttempts, &t.TimeoutSeconds,
-		&t.LockKey, &t.LeasedUntil, &t.LeasedBy, &t.TaskPath,
+		&t.LockKey, &t.ConcurrencyKey, &t.ConcurrencyLimit, &t.LeasedUntil, &t.LeasedBy, &t.TaskPath,
 	)
 
 	if err != nil {
@@ -500,8 +530,8 @@ func (s *Service) PruneExpired(ctx context.Context, limit int, dryRun bool) (int
 // Replay creates a new READY task from an existing one.
 func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 	query := `
-		INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key)
-		SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key
+		INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key, concurrency_key, concurrency_limit)
+		SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key, concurrency_key, concurrency_limit
 		FROM task_runs WHERE result_id = $1
 		RETURNING result_id
 	`
@@ -514,15 +544,15 @@ func (s *Service) Replay(ctx context.Context, resultID int64) (int64, error) {
 func (s *Service) ReplayBySpecHash(ctx context.Context, specHash string) (int64, int64, error) {
 	query := `
 		WITH source AS (
-			SELECT result_id, backend_alias, queue_name, priority, spec_json, spec_hash, max_attempts, timeout_seconds, lock_key
+			SELECT result_id, backend_alias, queue_name, priority, spec_json, spec_hash, max_attempts, timeout_seconds, lock_key, concurrency_key, concurrency_limit
 			FROM task_runs
 			WHERE spec_hash = $1
 			ORDER BY result_id DESC
 			LIMIT 1
 		),
 		inserted AS (
-			INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key)
-			SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key
+			INSERT INTO task_runs (backend_alias, queue_name, priority, spec_json, spec_hash, status, max_attempts, timeout_seconds, lock_key, concurrency_key, concurrency_limit)
+			SELECT backend_alias, queue_name, priority, spec_json, spec_hash, 'READY', max_attempts, timeout_seconds, lock_key, concurrency_key, concurrency_limit
 			FROM source
 			RETURNING result_id
 		)

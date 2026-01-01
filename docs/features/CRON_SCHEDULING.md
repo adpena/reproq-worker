@@ -11,6 +11,7 @@ Users need to run tasks at regular intervals (e.g., every Monday at 8 AM) withou
 - [x] Migration: Create `periodic_tasks` table (`name`, `cron_expr`, `task_path`, `payload`, `last_run_at`).
 - [x] Logic: Implement cron parser and "next run" calculator.
 - [x] CLI: Implement `reproq beat` loop.
+- [x] CLI: Support `reproq beat --once` for cron-driven execution.
 
 ## References
 - `robfig/cron` (Go library).
