@@ -112,7 +112,7 @@ func TestQueuePausePreventsClaim(t *testing.T) {
 	_, err = pool.Exec(ctx, `
 		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
 		VALUES ($1, 'paused', '{"task_path":"myapp.tasks.pause","args":[],"kwargs":{}}', 'READY', NOW())
-	`, "pausehash"+strings.Repeat("0", 56))
+	`, "pausehash"+strings.Repeat("0", 55))
 	if err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
