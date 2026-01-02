@@ -105,3 +105,47 @@ func TestParsePeriodicPayloadInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid payload")
 	}
 }
+
+func TestPeriodicSpecJSONKeys(t *testing.T) {
+	key := "user:1"
+	spec := periodicSpec{
+		TaskPath:         "app.tasks.sample",
+		Args:             json.RawMessage(`[1]`),
+		Kwargs:           json.RawMessage(`{"k":"v"}`),
+		QueueName:        "default",
+		Priority:         2,
+		ConcurrencyKey:   &key,
+		ConcurrencyLimit: 3,
+		PeriodicName:     "nightly",
+		ScheduledAt:      "2025-01-01T00:00:00Z",
+		Exec: execSpec{
+			TimeoutSeconds: 900,
+			MaxAttempts:    4,
+		},
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal spec: %v", err)
+	}
+	keys := []string{
+		"task_path",
+		"args",
+		"kwargs",
+		"queue_name",
+		"priority",
+		"concurrency_key",
+		"concurrency_limit",
+		"periodic_name",
+		"scheduled_at",
+		"exec",
+	}
+	for _, k := range keys {
+		if _, ok := payload[k]; !ok {
+			t.Fatalf("missing key %q in spec payload", k)
+		}
+	}
+}
