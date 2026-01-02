@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -26,7 +27,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.142"
+const Version = "0.0.143"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -387,39 +388,50 @@ func runBeat(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	processRole := strings.TrimSpace(os.Getenv("REPROQ_PROCESS_ROLE"))
+	if processRole == "" {
+		processRole = "beat"
+	}
+	logger := logging.Init(processRole).With("role", processRole)
+	slog.SetDefault(logger)
+	if interval := memoryLogIntervalFromEnv(logger); interval > 0 {
+		startMemoryLogger(ctx, logger, interval)
+	}
+
 	pool, err := db.NewPool(ctx, *dsn)
 	if err != nil {
-		log.Fatal(err)
+		logger.Error("Failed to open database", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
 	q := queue.NewService(pool)
-	fmt.Printf("Starting reproq beat (interval: %v)...\n", *interval)
+	logger.Info("Starting reproq beat", "interval", *interval, "once", *once)
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
 	// Run once immediately
 	if n, err := q.EnqueueDuePeriodicTasks(ctx); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		logger.Error("Failed to enqueue periodic tasks", "error", err, "enqueued", n)
 	} else if n > 0 {
-		fmt.Printf("Enqueued %d periodic tasks\n", n)
+		logger.Info("Enqueued periodic tasks", "count", n)
 	}
 	if *once {
-		fmt.Println("Beat run complete (--once).")
+		logger.Info("Beat run complete", "once", true)
 		return
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("Shutting down beat...")
+			logger.Info("Shutting down beat")
 			return
 		case <-ticker.C:
 			if n, err := q.EnqueueDuePeriodicTasks(ctx); err != nil {
-				fmt.Printf("Error: %v\n", err)
+				logger.Error("Failed to enqueue periodic tasks", "error", err, "enqueued", n)
 			} else if n > 0 {
-				fmt.Printf("Enqueued %d periodic tasks\n", n)
+				logger.Info("Enqueued periodic tasks", "count", n)
 			}
 		}
 	}

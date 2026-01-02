@@ -81,6 +81,9 @@ Starts the periodic task scheduler. **Run only one instance per database.**
 ./reproq beat --dsn "postgres://..." --once
 ```
 Use `--once` for cron-driven or low-memory environments.
+Beat reads the `periodic_tasks` table and enqueues due runs using `FOR UPDATE SKIP LOCKED`.
+Cron evaluation is UTC-based to match Django's `timezone.now()` defaults.
+Set `REPROQ_MEMORY_LOG_INTERVAL=60s` to capture beat memory stats.
 
 ### `replay`
 Manually re-enqueues a task by result ID or spec hash (latest match).

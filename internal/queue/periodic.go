@@ -8,22 +8,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/robfig/cron/v3"
 )
 
 type PeriodicTask struct {
-	Name        string          `db:"name"`
-	CronExpr    string          `db:"cron_expr"`
-	TaskPath    string          `db:"task_path"`
-	PayloadJSON json.RawMessage `db:"payload_json"`
-	QueueName   string          `db:"queue_name"`
-	Priority    int             `db:"priority"`
-	MaxAttempts int             `db:"max_attempts"`
-	ConcurrencyKey   *string    `db:"concurrency_key"`
-	ConcurrencyLimit int        `db:"concurrency_limit"`
-	LastRunAt   *time.Time      `db:"last_run_at"`
-	NextRunAt   time.Time       `db:"next_run_at"`
-	Enabled     bool            `db:"enabled"`
+	Name             string          `db:"name"`
+	CronExpr         string          `db:"cron_expr"`
+	TaskPath         string          `db:"task_path"`
+	PayloadJSON      json.RawMessage `db:"payload_json"`
+	QueueName        string          `db:"queue_name"`
+	Priority         int             `db:"priority"`
+	MaxAttempts      int             `db:"max_attempts"`
+	ConcurrencyKey   *string         `db:"concurrency_key"`
+	ConcurrencyLimit int             `db:"concurrency_limit"`
+	LastRunAt        *time.Time      `db:"last_run_at"`
+	NextRunAt        time.Time       `db:"next_run_at"`
+	Enabled          bool            `db:"enabled"`
 }
 
 type execSpec struct {
@@ -32,16 +33,16 @@ type execSpec struct {
 }
 
 type periodicSpec struct {
-	TaskPath     string          `json:"task_path"`
-	Args         json.RawMessage `json:"args"`
-	Kwargs       map[string]any  `json:"kwargs"`
-	QueueName    string          `json:"queue_name"`
-	Priority     int             `json:"priority"`
-	ConcurrencyKey   *string     `json:"concurrency_key"`
-	ConcurrencyLimit int         `json:"concurrency_limit"`
-	PeriodicName string          `json:"periodic_name"`
-	ScheduledAt  string          `json:"scheduled_at"`
-	Exec         execSpec        `json:"exec"`
+	TaskPath         string          `json:"task_path"`
+	Args             json.RawMessage `json:"args"`
+	Kwargs           json.RawMessage `json:"kwargs"`
+	QueueName        string          `json:"queue_name"`
+	Priority         int             `json:"priority"`
+	ConcurrencyKey   *string         `json:"concurrency_key"`
+	ConcurrencyLimit int             `json:"concurrency_limit"`
+	PeriodicName     string          `json:"periodic_name"`
+	ScheduledAt      string          `json:"scheduled_at"`
+	Exec             execSpec        `json:"exec"`
 }
 
 // EnqueueDuePeriodicTasks finds tasks where next_run_at <= now, enqueues them, and schedules the next run.
@@ -94,44 +95,47 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 	}
 
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	failures := 0
+	var lastErr error
+	enqueued := 0
 
-	for _, t := range dueTasks {
-		// 2. Enqueue the task
-		argsJSON, kwargsJSON, err := parsePeriodicPayload(t.PayloadJSON)
-		if err != nil {
-			return 0, fmt.Errorf("failed to parse periodic payload for %s: %w", t.Name, err)
-		}
-		maxAttempts := t.MaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = 3
-		}
-		resolvedQueueName := t.QueueName
-		if resolvedQueueName == "" {
-			resolvedQueueName = "default"
-		}
-		spec := periodicSpec{
-			TaskPath:         t.TaskPath,
-			Args:             argsJSON,
-			Kwargs:           kwargsJSON,
-			QueueName:        resolvedQueueName,
-			Priority:         t.Priority,
-			ConcurrencyKey:   t.ConcurrencyKey,
-			ConcurrencyLimit: t.ConcurrencyLimit,
-			PeriodicName:     t.Name,
-			ScheduledAt:      t.NextRunAt.Format(time.RFC3339),
-			Exec: execSpec{
-				TimeoutSeconds: 900,
-				MaxAttempts:    maxAttempts,
-			},
-		}
-		specBytes, err := json.Marshal(spec)
-		if err != nil {
-			return 0, fmt.Errorf("failed to build spec for %s: %w", t.Name, err)
-		}
-		specJSON := string(specBytes)
-		specHashBytes := sha256.Sum256(specBytes)
-		specHash := hex.EncodeToString(specHashBytes[:])
-		insertQuery := `
+	for idx, t := range dueTasks {
+		err := withSavepoint(ctx, tx, fmt.Sprintf("periodic_%d", idx), func() error {
+			// 2. Enqueue the task
+			argsJSON, kwargsJSON, err := parsePeriodicPayload(t.PayloadJSON)
+			if err != nil {
+				return fmt.Errorf("failed to parse periodic payload for %s: %w", t.Name, err)
+			}
+			maxAttempts := t.MaxAttempts
+			if maxAttempts <= 0 {
+				maxAttempts = 3
+			}
+			resolvedQueueName := t.QueueName
+			if resolvedQueueName == "" {
+				resolvedQueueName = "default"
+			}
+			spec := periodicSpec{
+				TaskPath:         t.TaskPath,
+				Args:             argsJSON,
+				Kwargs:           kwargsJSON,
+				QueueName:        resolvedQueueName,
+				Priority:         t.Priority,
+				ConcurrencyKey:   t.ConcurrencyKey,
+				ConcurrencyLimit: t.ConcurrencyLimit,
+				PeriodicName:     t.Name,
+				ScheduledAt:      t.NextRunAt.UTC().Format(time.RFC3339),
+				Exec: execSpec{
+					TimeoutSeconds: 900,
+					MaxAttempts:    maxAttempts,
+				},
+			}
+			specBytes, err := json.Marshal(spec)
+			if err != nil {
+				return fmt.Errorf("failed to build spec for %s: %w", t.Name, err)
+			}
+			specHashBytes := sha256.Sum256(specBytes)
+			specHash := hex.EncodeToString(specHashBytes[:])
+			insertQuery := `
 			WITH params AS (
 				SELECT
 					$1::varchar(64) AS spec_hash,
@@ -143,7 +147,8 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 					$7::int AS max_attempts,
 					$8::int AS timeout_seconds,
 					$9::text AS concurrency_key,
-					$10::int AS concurrency_limit
+					$10::int AS concurrency_limit,
+					$11::text AS task_path
 			)
 			INSERT INTO task_runs (
 				backend_alias,
@@ -152,6 +157,7 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 				run_after,
 				spec_json,
 				spec_hash,
+				task_path,
 				status,
 				enqueued_at,
 				attempts,
@@ -173,6 +179,7 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 				params.run_after,
 				params.spec_json,
 				params.spec_hash,
+				params.task_path,
 				'READY',
 				NOW(),
 				0,
@@ -192,83 +199,97 @@ func (s *Service) EnqueueDuePeriodicTasks(ctx context.Context) (int, error) {
 				WHERE spec_hash = params.spec_hash AND status IN ('READY', 'RUNNING')
 			)
 		`
-		_, err = tx.Exec(
-			ctx,
-			insertQuery,
-			specHash,
-			resolvedQueueName,
-			specJSON,
-			t.Priority,
-			t.NextRunAt,
-			"default",
-			maxAttempts,
-			900,
-			t.ConcurrencyKey,
-			t.ConcurrencyLimit,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("failed to enqueue periodic task %s: %w", t.Name, err)
-		}
+			_, err = tx.Exec(
+				ctx,
+				insertQuery,
+				specHash,
+				resolvedQueueName,
+				specBytes,
+				t.Priority,
+				t.NextRunAt,
+				"default",
+				maxAttempts,
+				900,
+				t.ConcurrencyKey,
+				t.ConcurrencyLimit,
+				t.TaskPath,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to enqueue periodic task %s: %w", t.Name, err)
+			}
 
-		// 3. Schedule next run
-		sched, err := parser.Parse(t.CronExpr)
-		if err != nil {
-			return 0, fmt.Errorf("invalid cron expr for %s: %w", t.Name, err)
-		}
-		nextRun := sched.Next(time.Now())
+			// 3. Schedule next run
+			sched, err := parser.Parse(t.CronExpr)
+			if err != nil {
+				return fmt.Errorf("invalid cron expr for %s: %w", t.Name, err)
+			}
+			nextRun := sched.Next(time.Now().UTC())
 
-		updateQuery := `
+			updateQuery := `
 			UPDATE periodic_tasks
 			SET last_run_at = next_run_at,
 			    next_run_at = $1,
 			    updated_at = NOW()
 			WHERE name = $2
 		`
-		_, err = tx.Exec(ctx, updateQuery, nextRun, t.Name)
+			_, err = tx.Exec(ctx, updateQuery, nextRun, t.Name)
+			if err != nil {
+				return fmt.Errorf("failed to update next run for %s: %w", t.Name, err)
+			}
+			return nil
+		})
 		if err != nil {
-			return 0, fmt.Errorf("failed to update next run for %s: %w", t.Name, err)
+			failures++
+			lastErr = err
+			continue
 		}
+		enqueued++
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
 
-	return len(dueTasks), nil
+	if failures > 0 {
+		return enqueued, fmt.Errorf("failed to enqueue %d periodic tasks (last error: %w)", failures, lastErr)
+	}
+	return enqueued, nil
 }
 
-type periodicPayloadEnvelope struct {
-	Args   json.RawMessage `json:"args"`
-	Kwargs map[string]any  `json:"kwargs"`
-}
-
-func parsePeriodicPayload(raw json.RawMessage) (json.RawMessage, map[string]any, error) {
+func parsePeriodicPayload(raw json.RawMessage) (json.RawMessage, json.RawMessage, error) {
 	if len(raw) == 0 {
-		return json.RawMessage("[]"), map[string]any{}, nil
+		return json.RawMessage("[]"), json.RawMessage("{}"), nil
 	}
 
-	var envelope periodicPayloadEnvelope
+	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &envelope); err == nil {
-		if envelope.Args != nil || envelope.Kwargs != nil {
-			args := envelope.Args
+		_, hasArgs := envelope["args"]
+		_, hasKwargs := envelope["kwargs"]
+		if hasArgs || hasKwargs {
+			args := envelope["args"]
 			if len(args) == 0 {
 				args = json.RawMessage("[]")
 			}
-			if envelope.Kwargs == nil {
-				envelope.Kwargs = map[string]any{}
+			kwargs := envelope["kwargs"]
+			if len(kwargs) == 0 {
+				kwargs = json.RawMessage("{}")
 			}
-			return args, envelope.Kwargs, nil
+			if err := ensureJSONArray(args); err != nil {
+				return nil, nil, fmt.Errorf("invalid periodic args: %w", err)
+			}
+			if err := ensureJSONObject(kwargs); err != nil {
+				return nil, nil, fmt.Errorf("invalid periodic kwargs: %w", err)
+			}
+			return args, kwargs, nil
 		}
 	}
 
-	var args []any
-	if err := json.Unmarshal(raw, &args); err == nil {
-		return raw, map[string]any{}, nil
+	if err := ensureJSONArray(raw); err == nil {
+		return raw, json.RawMessage("{}"), nil
 	}
 
-	var kwargs map[string]any
-	if err := json.Unmarshal(raw, &kwargs); err == nil {
-		return json.RawMessage("[]"), kwargs, nil
+	if err := ensureJSONObject(raw); err == nil {
+		return json.RawMessage("[]"), raw, nil
 	}
 
 	return nil, nil, fmt.Errorf("invalid payload JSON")
@@ -282,7 +303,7 @@ func (s *Service) UpsertPeriodicTask(ctx context.Context, t PeriodicTask) error 
 		return fmt.Errorf("invalid cron expression: %w", err)
 	}
 
-	nextRun := sched.Next(time.Now())
+	nextRun := sched.Next(time.Now().UTC())
 
 	query := `
 		INSERT INTO periodic_tasks (name, cron_expr, task_path, payload_json, queue_name, priority, max_attempts, concurrency_key, concurrency_limit, next_run_at, enabled)
@@ -316,4 +337,33 @@ func (s *Service) UpsertPeriodicTask(ctx context.Context, t PeriodicTask) error 
 		t.Enabled,
 	)
 	return err
+}
+
+func withSavepoint(ctx context.Context, tx pgx.Tx, name string, fn func() error) error {
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+name)
+		_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+name)
+		return err
+	}
+	_, err := tx.Exec(ctx, "RELEASE SAVEPOINT "+name)
+	return err
+}
+
+func ensureJSONArray(raw json.RawMessage) error {
+	var decoded []any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureJSONObject(raw json.RawMessage) error {
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	return nil
 }

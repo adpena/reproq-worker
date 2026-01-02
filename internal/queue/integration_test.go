@@ -544,6 +544,26 @@ func TestPeriodicTasks(t *testing.T) {
 		t.Errorf("expected 1 task in task_runs, got %d", count)
 	}
 
+	var taskPath string
+	var specJSON json.RawMessage
+	err = pool.QueryRow(ctx, "SELECT task_path, spec_json FROM task_runs WHERE status = 'READY' LIMIT 1").Scan(&taskPath, &specJSON)
+	if err != nil {
+		t.Fatalf("failed to read periodic task run: %v", err)
+	}
+	if taskPath != "myapp.pt" {
+		t.Fatalf("expected task_path myapp.pt, got %q", taskPath)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		t.Fatalf("failed to parse spec_json: %v", err)
+	}
+	if spec["periodic_name"] != "test_pt" {
+		t.Fatalf("expected periodic_name test_pt, got %#v", spec["periodic_name"])
+	}
+	if _, ok := spec["scheduled_at"]; !ok {
+		t.Fatalf("expected scheduled_at in spec_json, got %#v", spec)
+	}
+
 	// Verify next_run_at updated
 	var nextRun time.Time
 	pool.QueryRow(ctx, "SELECT next_run_at FROM periodic_tasks WHERE name = 'test_pt'").Scan(&nextRun)
