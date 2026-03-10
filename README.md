@@ -1,6 +1,6 @@
 # Reproq Worker 🦀
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Documentation](https://img.shields.io/badge/Docs-View%20Online-emerald)](https://adpena.github.io/reproq-worker/)
 
 **The high-performance Go-based execution engine for Reproq Tasks.**
@@ -283,3 +283,7 @@ A specialized command to stress-test the worker under high concurrency.
 ```bash
 go run ./cmd/torture --dsn $DATABASE_URL --count 1000
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
