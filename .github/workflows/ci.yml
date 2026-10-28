@@ -1,10 +1,7 @@
 name: Go CI
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -15,7 +12,7 @@ jobs:
         env:
           POSTGRES_USER: user
           POSTGRES_PASSWORD: pass
-          POSTGRES_DB: reproq
+          POSTGRES_DB: reproq_test_ci
         ports:
           - 5432:5432
         options: >-
@@ -30,7 +27,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: 'go.mod'
+        go-version: '1.24.x'
 
     - name: Install dependencies
       run: go mod download
@@ -38,12 +35,18 @@ jobs:
     - name: Run Migrations
       run: |
         for f in $(ls -1v migrations/*.up.sql); do
-          psql "postgres://user:pass@localhost:5432/reproq?sslmode=disable" -f "$f"
+          psql "postgres://user:pass@localhost:5432/reproq_test_ci?sslmode=disable" -v ON_ERROR_STOP=1 -f "$f"
         done
       env:
         PGPASSWORD: pass
 
-    - name: Run Tests
-      run: go test -v ./...
+    - name: Install configured linter
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
+    - name: Local check targets
+      run: make check
+
+    - name: Isolated integration target
+      run: make test-integration
       env:
-        DATABASE_URL: "postgres://user:pass@localhost:5432/reproq?sslmode=disable"
+        REPROQ_TEST_DATABASE_URL: "postgres://user:pass@localhost:5432/reproq_test_ci?sslmode=disable"

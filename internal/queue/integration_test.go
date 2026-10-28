@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +14,7 @@ import (
 )
 
 func TestQueueIntegration(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -86,10 +82,7 @@ func TestQueueIntegration(t *testing.T) {
 }
 
 func TestQueuePausePreventsClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -125,10 +118,7 @@ func TestQueuePausePreventsClaim(t *testing.T) {
 }
 
 func TestConcurrencyLimitBlocksClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -165,10 +155,7 @@ func TestConcurrencyLimitBlocksClaim(t *testing.T) {
 }
 
 func TestRetryLifecycle(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -231,10 +218,7 @@ func TestRetryLifecycle(t *testing.T) {
 }
 
 func TestPriorityAgingClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -305,10 +289,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 }
 
 func TestRateLimitingClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -374,10 +355,7 @@ func TestRateLimitingClaim(t *testing.T) {
 }
 
 func TestWorkflowChordRelease(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -390,7 +368,18 @@ func TestWorkflowChordRelease(t *testing.T) {
 	pool.Exec(ctx, "DELETE FROM rate_limits")
 	s := NewService(pool)
 
-	workflowID := "11111111-1111-1111-1111-111111111111"
+	var workflowID string
+	if err := pool.QueryRow(ctx, "SELECT gen_random_uuid()::text").Scan(&workflowID); err != nil {
+		t.Fatalf("failed to allocate owned workflow ID: %v", err)
+	}
+	defer func() {
+		if _, err := pool.Exec(ctx, "DELETE FROM task_runs WHERE workflow_id=$1", workflowID); err != nil {
+			t.Errorf("failed to clean owned workflow tasks: %v", err)
+		}
+		if _, err := pool.Exec(ctx, "DELETE FROM workflow_runs WHERE workflow_id=$1", workflowID); err != nil {
+			t.Errorf("failed to clean owned workflow: %v", err)
+		}
+	}()
 
 	var id1 int64
 	var id2 int64
@@ -493,10 +482,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 }
 
 func TestPeriodicTasks(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -573,10 +559,7 @@ func TestPeriodicTasks(t *testing.T) {
 }
 
 func TestWorkerRegistration(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -606,10 +589,7 @@ func TestWorkerRegistration(t *testing.T) {
 }
 
 func TestRequestCancel(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -662,10 +642,7 @@ func TestRequestCancel(t *testing.T) {
 }
 
 func TestTriageLifecycle(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -750,10 +727,7 @@ func TestTriageLifecycle(t *testing.T) {
 }
 
 func TestCompleteSuccessSetsLogsURI(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -798,10 +772,7 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 }
 
 func TestReplayBySpecHash(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -864,10 +835,7 @@ func TestReplayBySpecHash(t *testing.T) {
 }
 
 func TestPruneExpired(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testDatabaseURL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)

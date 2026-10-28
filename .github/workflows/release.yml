@@ -1,62 +1,51 @@
 name: Release Worker
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag matching the worker Version constant
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: worker-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
-  build:
+  draft:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: darwin
-            goarch: amd64
-            ext: ""
-          - goos: darwin
-            goarch: arm64
-            ext: ""
-          - goos: linux
-            goarch: amd64
-            ext: ""
-          - goos: linux
-            goarch: arm64
-            ext: ""
-          - goos: windows
-            goarch: amd64
-            ext: ".exe"
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_PROMPT_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          go-version: '1.24.13'
+      - name: Reject any existing release
+        shell: bash
         run: |
-          mkdir -p dist
-          go build -tags prod -o "dist/reproq-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/reproq
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' > "$RUNNER_TEMP/release-tags"
+          if grep -Fxq -- "$RELEASE_TAG" "$RUNNER_TEMP/release-tags"; then
+            echo "A release already exists for $RELEASE_TAG; it will not be changed." >&2
+            exit 1
+          fi
+      - name: Build canonical candidates
+        run: scripts/build_releases.sh --tag "$RELEASE_TAG" --output dist/release
       - uses: actions/upload-artifact@v4
         with:
-          name: reproq-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
-          path: dist/reproq-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          name: worker-release-candidates
+          path: dist/release/*
           if-no-files-found: error
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
+      - name: Verify final bytes and create an unpublished draft
+        shell: bash
+        run: |
+          (cd dist/release && sha256sum -c SHA256SUMS)
+          gh release create "$RELEASE_TAG" dist/release/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --latest=false --title "$RELEASE_TAG" --generate-notes

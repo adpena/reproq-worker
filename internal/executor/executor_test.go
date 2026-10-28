@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,7 +41,7 @@ func TestShellExecutor_InvalidJSON(t *testing.T) {
 	if res.Ok {
 		t.Error("expected Ok=false for invalid JSON stdout")
 	}
-	if !contains(res.Message, "Invalid JSON on stdout") {
+	if !strings.Contains(res.Message, "Invalid JSON on stdout") {
 		t.Errorf("expected error message about invalid JSON, got %q", res.Message)
 	}
 	fmt.Printf("Captured stdout: %q\n", stdout)
@@ -52,14 +53,9 @@ func TestBoundedBuffer(t *testing.T) {
 	if b.buf.String() != "hello" {
 		t.Errorf("expected 'hello', got %q", b.buf.String())
 	}
-	if !contains(b.String(), "[TRUNCATED") {
+	if !strings.Contains(b.String(), "[TRUNCATED") {
 		t.Error("expected truncation notice")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || true))
-	// simplified for this context
 }
 
 func TestMockExecutor(t *testing.T) {

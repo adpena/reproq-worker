@@ -60,6 +60,32 @@ go build -tags prod -o reproq ./cmd/reproq
 ```
 This disables `--payload-mode inline` to avoid leaking payload data via process args.
 
+For reviewable cross-platform candidates from a clean, committed checkout:
+
+```bash
+make release-build OUT=dist/candidate
+# After a separately reviewed tag already exists and identifies HEAD:
+make release-build TAG=v0.0.144 OUT=dist/tagged-candidate
+```
+
+The canonical builder produces five production binaries with `CGO_ENABLED=0`,
+`-trimpath`, baseline CPU targets, a build manifest, per-asset SHA256 sidecars,
+and `SHA256SUMS`. It refuses an existing output directory, dirty source, hidden
+Git index flags, or tracked source bytes that differ from committed regular
+files. It claims the output directory exclusively and verifies every copied
+asset before success; an I/O failure may leave incomplete owned output for
+inspection. A
+build without `TAG` is explicitly marked `UNRELEASED`; it creates no tag or
+release. A tagged candidate must match the single worker `Version` constant
+and the tag's commit must equal `HEAD`.
+
+GitHub CI and releases run only through manual dispatch. The release workflow
+accepts an existing tag, calls this same builder, and creates an unpublished
+draft. Dispatch from the reviewed ref whose `HEAD` the tag identifies. The
+workflow refuses an existing release and never replaces its assets. Review
+the artifacts and checksums before a separate publication decision; keeping
+the same Go toolchain, source, and build policy is required for byte comparisons.
+
 ---
 
 ## 🛠 Usage
@@ -263,23 +289,43 @@ Rule of thumb:
 ## 🧪 Development & Testing
 
 ### Quick Local Bootstrap
+The current check configuration uses Go 1.24.x and golangci-lint v1.64.8. Install
+those tools on your PATH, then bootstrap without touching a database:
 ```bash
 bash scripts/dev_bootstrap.sh
 ```
 
-### Run Unit Tests
+### Local Check Gate
 ```bash
-make test
+make check
 ```
+This runs all module unit tests, `go vet`, and the configured linters. `make test`
+uses `-short` and clears application/test database selectors. Hosted CI is manual
+only and delegates to these same targets.
 
 ### Run Integration Tests
-Requires a running PostgreSQL instance. These tests verify the full lifecycle: claim -> execute -> complete.
+Prepare a dedicated local PostgreSQL database named `reproq_test_<suffix>` and
+apply `migrations/000001_baseline.up.sql` with your selected PostgreSQL client.
+Set `REPROQ_TEST_DATABASE_URL` to that database's connection string, then run:
 ```bash
 make test-integration
+make bench BENCHTIME=100x
 ```
+The test guard accepts only explicit loopback hosts and the `reproq_test_`
+database prefix, including all connection fallbacks. It never uses ambient
+`DATABASE_URL`. Integration tests clear queue tables in this dedicated database;
+the claim benchmark creates a unique queue and deletes only its owned fixtures.
+Every reported benchmark iteration must claim one owned RUNNING task.
+
+These targets do not create, migrate, start, stop, or delete database services.
+They fail if the explicit test connection is absent or unsafe. Queue integration
+tests verify real PostgreSQL state transitions; end-to-end Python execution and
+whole-service resource qualification require their own workload evidence.
 
 ### Torture Test
-A specialized command to stress-test the worker under high concurrency.
+A separate enqueue-only command can seed a disposable database. It does not
+verify task completion or establish worker throughput. It has no test guard;
+never point it at an application database.
 ```bash
 go run ./cmd/torture --dsn $DATABASE_URL --count 1000
 ```
