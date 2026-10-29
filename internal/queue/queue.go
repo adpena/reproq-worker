@@ -273,7 +273,7 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID,
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
-	if err := lockClaimRow(ctx, tx, resultID); err != nil {
+	if _, err := lockTransitionScope(ctx, tx, []int64{resultID}, false, false); err != nil {
 		return err
 	}
 
@@ -326,58 +326,8 @@ func (s *Service) CompleteSuccess(ctx context.Context, resultID int64, workerID,
 		return fmt.Errorf("failed to trigger dependents: %w", err)
 	}
 
-	// 3. Strict workflow semantics (chords).
-	workflowQuery := `
-		WITH wf AS (
-			SELECT workflow_id FROM public.task_runs
-			WHERE result_id = $1 AND workflow_id IS NOT NULL
-		),
-		mark_callback AS (
-			UPDATE public.workflow_runs
-			SET status = 'SUCCESSFUL',
-			    updated_at = NOW()
-			WHERE workflow_id = (SELECT workflow_id FROM wf)
-			  AND callback_result_id = $1
-			RETURNING workflow_id
-		),
-		mark_group AS (
-			UPDATE public.workflow_runs
-			SET success_count = success_count + 1,
-			    status = CASE
-					WHEN status = 'FAILED' THEN status
-					WHEN (success_count + 1) >= expected_count AND failure_count = 0 THEN 'WAITING_CALLBACK'
-					ELSE status
-				END,
-			    updated_at = NOW()
-			WHERE workflow_id = (SELECT workflow_id FROM wf)
-			  AND callback_result_id <> $1
-			  AND status <> 'FAILED'
-			RETURNING workflow_id, expected_count, success_count, failure_count, callback_result_id, status
-		)
-		SELECT expected_count, success_count, failure_count, callback_result_id, status
-		FROM mark_group
-	`
-	var expectedCount int
-	var successCount int
-	var failureCount int
-	var callbackID *int64
-	var status *string
-	err = tx.QueryRow(ctx, workflowQuery, resultID).Scan(&expectedCount, &successCount, &failureCount, &callbackID, &status)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("failed to update workflow state: %w", err)
-	}
-	if callbackID != nil && status != nil && *status == "WAITING_CALLBACK" && failureCount == 0 && successCount >= expectedCount {
-		_, err = tx.Exec(ctx, `
-			UPDATE public.task_runs
-			SET status = 'READY',
-			    wait_count = 0,
-			    updated_at = NOW()
-			WHERE result_id = $1
-			  AND status = 'WAITING'
-		`, *callbackID)
-		if err != nil {
-			return fmt.Errorf("failed to release workflow callback: %w", err)
-		}
+	if err := completeWorkflowSuccess(ctx, tx, resultID); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)
@@ -419,7 +369,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID,
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
-	if err := lockClaimRow(ctx, tx, resultID); err != nil {
+	if _, err := lockTransitionScope(ctx, tx, []int64{resultID}, true, false); err != nil {
 		return "", err
 	}
 
@@ -433,7 +383,7 @@ func (s *Service) CompleteFailure(ctx context.Context, resultID int64, workerID,
 	}
 
 	if status == StatusFailed || status == StatusCancelled {
-		if err := finalizeFailedWorkflow(ctx, tx, resultID); err != nil {
+		if err := finalizeTerminalDependencies(ctx, tx, []int64{resultID}, []int64{resultID}); err != nil {
 			return "", err
 		}
 	}
@@ -453,82 +403,6 @@ func ValidatePruneLimit(limit int) error {
 		return ErrInvalidPruneLimit
 	}
 	return nil
-}
-
-// PruneExpired deletes task_runs where expires_at is in the past and status is not RUNNING.
-func (s *Service) PruneExpired(ctx context.Context, limit int, dryRun bool) (int64, error) {
-	if err := ValidatePruneLimit(limit); err != nil {
-		return 0, err
-	}
-	if dryRun {
-		if limit > 0 {
-			query := `
-				SELECT COUNT(*) FROM (
-					SELECT 1
-					FROM public.task_runs
-					WHERE expires_at IS NOT NULL
-					  AND expires_at <= NOW()
-					  AND status <> 'RUNNING'
-					ORDER BY expires_at ASC
-					LIMIT $1
-				) expired
-			`
-			var count int64
-			if err := s.pool.QueryRow(ctx, query, limit).Scan(&count); err != nil {
-				return 0, err
-			}
-			return count, nil
-		}
-		query := `
-			SELECT COUNT(*)
-			FROM public.task_runs
-			WHERE expires_at IS NOT NULL
-			  AND expires_at <= NOW()
-			  AND status <> 'RUNNING'
-		`
-		var count int64
-		if err := s.pool.QueryRow(ctx, query).Scan(&count); err != nil {
-			return 0, err
-		}
-		return count, nil
-	}
-
-	if limit > 0 {
-		query := `
-			WITH expired AS (
-				SELECT result_id
-				FROM public.task_runs
-				WHERE expires_at IS NOT NULL
-				  AND expires_at <= NOW()
-				  AND status <> 'RUNNING'
-				ORDER BY expires_at ASC
-				LIMIT $1
-				FOR UPDATE SKIP LOCKED
-			)
-			DELETE FROM public.task_runs
-			USING expired
-			WHERE task_runs.result_id = expired.result_id
-			  AND task_runs.status <> 'RUNNING'
-			  AND task_runs.expires_at IS NOT NULL AND task_runs.expires_at <= clock_timestamp()
-		`
-		tag, err := s.pool.Exec(ctx, query, limit)
-		if err != nil {
-			return 0, err
-		}
-		return tag.RowsAffected(), nil
-	}
-
-	query := `
-		DELETE FROM public.task_runs
-		WHERE expires_at IS NOT NULL
-		  AND expires_at <= NOW()
-		  AND status <> 'RUNNING'
-	`
-	tag, err := s.pool.Exec(ctx, query)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
 }
 
 // Replay creates a new READY task from an existing one.

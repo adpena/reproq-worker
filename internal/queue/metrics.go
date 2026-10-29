@@ -24,3 +24,8 @@ var cancellationTransitions = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "reproq_cancellation_transitions_total",
 	Help: "Operator cancellation requests or pending cancellations acknowledged by PostgreSQL",
 }, []string{"outcome"})
+
+var prunedTasks = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "reproq_pruned_tasks_total",
+	Help: "Task history deletions acknowledged by PostgreSQL; dry runs are excluded",
+}, []string{"policy"})

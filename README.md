@@ -175,13 +175,34 @@ List, inspect, and retry failed tasks.
 ./reproq triage retry --dsn "..." --all
 ```
 
+In-place retry refuses terminal workflow members. A mixed bulk selection fails
+atomically. Enqueue a fresh workflow to recover its dependencies, or explicitly
+replay a detached single task. Automatic retries retain their original workflow.
+
 ### `prune`
-Delete expired tasks (where `expires_at` is in the past and status is not `RUNNING`).
+Finalize expired pending tasks and remove eligible history.
 
 ```bash
 ./reproq prune expired --dsn "..." --dry-run
 ./reproq prune expired --dsn "..." --limit 1000
+
+# Terminal history, using REPROQ_DATABASE_URL from the environment
+./reproq prune history --statuses SUCCESSFUL,FAILED,CANCELLED --older-than 168h --field finished_at --limit 1000 --json
 ```
+
+Expiry closes blocked chain descendants and chord callbacks through the same
+terminal transition used by failure, cancellation and reclaim. Running tasks and
+unknown states are retained. History pruning retains a task while a child or
+another workflow member remains active, including unknown states.
+
+History accepts `finished_at`, `started_at`, `enqueued_at` or `updated_at`; null
+timestamps are excluded. Its JSON response is exactly `count` and `dry_run`.
+Dry runs count currently eligible rows without changing them. Positive limits
+bound both reported eligibility and actual deletions; zero is unbounded.
+Maintenance uses bounded batches and skips locked scopes so unrelated work can
+progress. Each pass has a fixed upper ID and cursor: retained history can become
+eligible on a later pass. Only acknowledged deletions increment
+`reproq_pruned_tasks_total`; dry runs do not.
 
 ### `limit`
 Manage rate limits in the database.

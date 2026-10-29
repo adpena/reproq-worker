@@ -9,7 +9,7 @@ import (
 )
 
 func runCapabilities() {
-	if err := json.NewEncoder(os.Stdout).Encode(protocol.Capabilities{WorkerVersion: Version, SchemaID: protocol.SchemaID, SchemaVersion: protocol.SchemaVersion, ExecutorProtocol: protocol.ExecutorVersion}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(protocol.Capabilities{WorkerVersion: Version, SchemaID: protocol.SchemaID, SchemaVersion: protocol.SchemaVersion, ExecutorProtocol: protocol.ExecutorVersion, Operations: map[string]int{"history_prune": 1}}); err != nil {
 		log.Fatal(err)
 	}
 }

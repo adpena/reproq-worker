@@ -40,3 +40,15 @@ require_source_identity() {
   [[ "$revision" == "$(git rev-parse --verify HEAD)" && "$tree" == "$(git rev-parse --verify 'HEAD^{tree}')" ]] || fail 'source revision changed during build'
   check_source
 }
+
+# Inspect cross-platform binaries without executing them. Both the canonical
+# builder and container consumer require the same embedded source/toolchain.
+require_binary_build_metadata() {
+  local binary="$1" target="$2" compiler="$3" information first_line expected
+  information="$(go version -m "$binary")" || fail "cannot inspect build metadata: $binary"
+  first_line=${information%%$'\n'*}
+  [[ "$first_line" == *": $compiler" ]] || fail "wrong compiler in $binary"
+  for expected in "vcs.revision=$revision" 'vcs.modified=false' "GOOS=${target%/*}" "GOARCH=${target#*/}" '-tags=prod' '-trimpath=true' 'CGO_ENABLED=0'; do
+    printf '%s\n' "$information" | grep -Fqx -- $'\tbuild\t'"$expected" || fail "build metadata differs in $binary: $expected; verify checkout and Go VCS discovery"
+  done
+}

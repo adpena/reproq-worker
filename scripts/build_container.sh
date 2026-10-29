@@ -36,13 +36,7 @@ IFS=$'\t' read -r bundle_version bundle_revision bundle_tree bundle_mode bundle_
 [[ "$bundle_compiler" == "$actual_go_patch" ]] || fail 'bundle compiler differs from the canonical source toolchain'
 for target in $bundle_platforms; do
   name="$(sh scripts/verify_release_bundle.sh "$artifacts" "$manifest_sha" "$checksums_sha" "${target%/*}" "${target#*/}")"
-  # go version -m reads build metadata; it does not execute the candidate.
-  information="$(go version -m "$artifacts/$name")"
-  first_line=${information%%$'\n'*}
-  [[ "$first_line" == *": $bundle_compiler" ]] || fail "wrong compiler in $name"
-  for expected in "vcs.revision=$revision" 'vcs.modified=false' "GOOS=${target%/*}" "GOARCH=${target#*/}" '-tags=prod' '-trimpath=true' 'CGO_ENABLED=0'; do
-    printf '%s\n' "$information" | grep -Fqx -- $'\tbuild\t'"$expected" || fail "build metadata differs in $name: $expected"
-  done
+  require_binary_build_metadata "$artifacts/$name" "$target" "$bundle_compiler"
 done
 context="$(mktemp -d "${TMPDIR:-/tmp}/reproq-container.XXXXXX")"
 trap 'rm -rf "$context"' EXIT

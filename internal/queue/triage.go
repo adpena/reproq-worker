@@ -177,6 +177,8 @@ func (s *Service) RetryAllFailedTasks(ctx context.Context) (int64, error) {
 	return s.retryFailed(ctx, nil)
 }
 
+var ErrWorkflowRetry = errors.New("terminal workflow tasks cannot be retried in place; enqueue a fresh workflow or explicitly replay a detached single task")
+
 func (s *Service) retryFailed(ctx context.Context, resultID *int64) (int64, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -191,9 +193,9 @@ func (s *Service) retryFailed(ctx context.Context, resultID *int64) (int64, erro
 	}
 	// Materialize and lock targets in the database, then derive the gate and
 	// update from that exact set. Large queues do not allocate one Go ID per row.
-	var legacy, unsupported, changed int64
+	var legacy, unsupported, workflowMembers, changed int64
 	err = tx.QueryRow(ctx, `WITH targets AS MATERIALIZED (
-  SELECT result_id,spec_version FROM public.task_runs WHERE `+predicate+` ORDER BY result_id FOR UPDATE
+  SELECT result_id,spec_version,workflow_id FROM public.task_runs WHERE `+predicate+` ORDER BY result_id FOR UPDATE
  ), changed AS (
   UPDATE public.task_runs SET status='READY',run_after=clock_timestamp(),
    attempts=0,started_at=NULL,last_attempted_at=NULL,finished_at=NULL,return_json=NULL,
@@ -201,10 +203,12 @@ func (s *Service) retryFailed(ctx context.Context, resultID *int64) (int64, erro
    cancel_requested=FALSE,updated_at=clock_timestamp()
   WHERE result_id IN (SELECT result_id FROM targets) AND status='FAILED'
    AND NOT EXISTS(SELECT 1 FROM targets WHERE spec_version<>1)
+   AND NOT EXISTS(SELECT 1 FROM targets WHERE workflow_id IS NOT NULL)
   RETURNING result_id
  ) SELECT (SELECT count(*) FROM targets WHERE spec_version=0),
   (SELECT count(*) FROM targets WHERE spec_version NOT IN(0,1)),
-  (SELECT count(*) FROM changed)`, arguments...).Scan(&legacy, &unsupported, &changed)
+  (SELECT count(*) FROM targets WHERE workflow_id IS NOT NULL),
+  (SELECT count(*) FROM changed)`, arguments...).Scan(&legacy, &unsupported, &workflowMembers, &changed)
 	if err != nil {
 		return 0, err
 	}
@@ -213,6 +217,9 @@ func (s *Service) retryFailed(ctx context.Context, resultID *int64) (int64, erro
 	}
 	if unsupported > 0 {
 		return 0, errors.New("unsupported task spec_version; install a compatible runtime before retrying")
+	}
+	if workflowMembers > 0 {
+		return 0, ErrWorkflowRetry
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err

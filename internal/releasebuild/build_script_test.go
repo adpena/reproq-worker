@@ -84,7 +84,7 @@ set -euo pipefail
 if [[ "$1" == version && "${2:-}" == -m ]]; then
   target="$(sed -n 's/^test artifact //p' "$3")"
   revision="$(git rev-parse HEAD)"
-  [[ "${CONTAINER_TEST_WRONG_REVISION:-}" != 1 ]] || revision=0000000000000000000000000000000000000000
+  [[ "${CONTAINER_TEST_WRONG_REVISION:-}" != 1 && "${RELEASE_TEST_WRONG_REVISION:-}" != 1 ]] || revision=0000000000000000000000000000000000000000
   printf '%s: go1.26.10\n' "$3"
   printf '\tbuild\t%s\n' "vcs.revision=$revision" 'vcs.modified=false' "GOOS=${target%/*}" "GOARCH=${target#*/}" '-tags=prod' '-trimpath=true' 'CGO_ENABLED=0'
   if [[ "${CONTAINER_TEST_COMMIT_BEFORE_DOCKER:-}" == 1 && "$target" == windows/amd64 ]]; then
@@ -157,6 +157,22 @@ func TestCompilerChangedDuringBuildRejected(t *testing.T) {
 	f.build(t, false, "--unreleased", "--output", "dist/candidate")
 	if _, err := os.Stat(filepath.Join(f.root, "dist/candidate")); !os.IsNotExist(err) {
 		t.Fatalf("compiler mutation published output: %v", err)
+	}
+}
+
+func TestWrongEmbeddedSourceRejectedBeforePublication(t *testing.T) {
+	f := newFixture(t)
+	f.env = append(f.env, "RELEASE_TEST_WRONG_REVISION=1")
+	output := f.build(t, false, "--unreleased", "--output", "dist/rejected")
+	if !strings.Contains(output, "build metadata differs") || !strings.Contains(output, "vcs.revision=") {
+		t.Fatalf("wrong source did not produce an actionable metadata failure: %s", output)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "dist/rejected")); !os.IsNotExist(err) {
+		t.Fatalf("wrong embedded source published an output: %v", err)
+	}
+	calls, err := os.ReadFile(f.log)
+	if err != nil || len(strings.Split(strings.TrimSpace(string(calls)), "\n")) != 1 {
+		t.Fatalf("wrong embedded source did not stop after the first build: %q, %v", calls, err)
 	}
 }
 

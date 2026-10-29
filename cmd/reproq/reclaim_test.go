@@ -48,6 +48,9 @@ func TestWorkerCapabilityCommandUsesRuntimeProtocolContract(t *testing.T) {
 	if err := json.Unmarshal(output, &capability); err != nil || capability.WorkerVersion != Version || capability.SchemaID != protocol.SchemaID || capability.SchemaVersion != protocol.SchemaVersion || capability.ExecutorProtocol != protocol.ExecutorVersion || capability.SDKVersion != "" {
 		t.Fatal("worker capability response disagrees with runtime")
 	}
+	if capability.Operations["history_prune"] != 1 {
+		t.Fatal("worker did not advertise canonical history pruning")
+	}
 }
 
 func cliChild(t *testing.T, commandName, dsn string, arguments ...string) ([]byte, error) {

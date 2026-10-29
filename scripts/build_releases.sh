@@ -76,6 +76,7 @@ for platform in "${platforms[@]}"; do
   [[ "$target_os" != windows ]] || name="$name.exe"
   echo "Building $platform ($mode)..."
   GOOS="$target_os" GOARCH="$target_arch" go build -mod=readonly -trimpath -buildvcs=true -tags prod -o "$staging/$name" ./cmd/reproq
+  require_binary_build_metadata "$staging/$name" "$platform" "$actual_go_patch"
   artifacts+=("$name")
 done
 

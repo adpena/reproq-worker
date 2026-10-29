@@ -599,11 +599,12 @@ func runLimit(args []string) {
 
 func runPrune(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: reproq prune <expired> [args]")
-		return
+		log.Fatal("usage: reproq prune <expired|history> [args]")
 	}
 
 	switch args[0] {
+	case "history":
+		runPruneHistory(args[1:])
 	case "expired":
 		fs := flag.NewFlagSet("prune expired", flag.ExitOnError)
 		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
@@ -642,7 +643,7 @@ func runPrune(args []string) {
 		}
 		fmt.Printf("Pruned %d expired task(s)\n", count)
 	default:
-		fmt.Println("usage: reproq prune <expired> [args]")
+		log.Fatal("unknown prune subcommand; expected expired or history")
 	}
 }
 
