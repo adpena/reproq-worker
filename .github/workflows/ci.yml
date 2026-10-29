@@ -6,21 +6,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: pass
-          POSTGRES_DB: reproq_test_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    # Database integration uses make test-integration locally with a Django-prepared DB.
     steps:
     - uses: actions/checkout@v4
 
@@ -32,23 +18,10 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
-    - name: Run Migrations
-      run: |
-        for f in $(ls -1v migrations/*.up.sql); do
-          psql "postgres://user:pass@localhost:5432/reproq_test_ci?sslmode=disable" -v ON_ERROR_STOP=1 -f "$f"
-        done
-      env:
-        PGPASSWORD: pass
-
     - name: Install configured linter
       run: |
         make lint-install
         echo "$PWD/.local/bin" >> "$GITHUB_PATH"
 
-    - name: Local check targets
+    - name: Unit tests, vet and lint
       run: make check
-
-    - name: Isolated integration target
-      run: make test-integration
-      env:
-        REPROQ_TEST_DATABASE_URL: "postgres://user:pass@localhost:5432/reproq_test_ci?sslmode=disable"
