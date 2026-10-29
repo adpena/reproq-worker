@@ -50,22 +50,19 @@ The recommended way to install the worker is via the Django management command, 
 python manage.py reproq install
 ```
 
-Alternatively, build from source:
+For a local development binary, use the source toolchain selected in `go.mod`:
 ```bash
-go build -o reproq ./cmd/reproq
+make build
 ```
-For production builds, prefer:
-```bash
-go build -tags prod -o reproq ./cmd/reproq
-```
-This disables `--payload-mode inline` to avoid leaking payload data via process args.
+This quick build is not a release candidate. Production artifacts use the
+canonical builder below, including the `prod` tag that disables inline payload mode.
 
 For reviewable cross-platform candidates from a clean, committed checkout:
 
 ```bash
 make release-build OUT=dist/candidate
 # After a separately reviewed tag already exists and identifies HEAD:
-make release-build TAG=v0.0.144 OUT=dist/tagged-candidate
+make release-build TAG=v0.0.145 OUT=dist/tagged-candidate
 ```
 
 The canonical builder produces five production binaries with `CGO_ENABLED=0`,
@@ -85,6 +82,11 @@ draft. Dispatch from the reviewed ref whose `HEAD` the tag identifies. The
 workflow refuses an existing release and never replaces its assets. Review
 the artifacts and checksums before a separate publication decision; keeping
 the same Go toolchain, source, and build policy is required for byte comparisons.
+
+Containers package these same verified artifacts; they do not compile another
+worker. See the [deployment guide](DEPLOYMENT.md#runtime-container) for the local
+container and Compose commands. The runtime image includes a shell and public
+CA bundle, but does not contain your Django project's Python environment.
 
 ---
 
@@ -289,19 +291,33 @@ Rule of thumb:
 ## 🧪 Development & Testing
 
 ### Quick Local Bootstrap
-The current check configuration uses Go 1.24.x and golangci-lint v1.64.8. Install
-those tools on your PATH, then bootstrap without touching a database:
+Canonical checks and release builds use the exact patched Go version in
+`go.mod` (currently 1.26.10). Build the linter source version selected in
+`Makefile` with that compiler so its bundled standard library also receives the
+security fixes:
 ```bash
-bash scripts/dev_bootstrap.sh
+make lint-install
+```
+Add that local bin directory to the command's PATH, then bootstrap without
+touching a database:
+```bash
+PATH="$PWD/.local/bin:$PATH" bash scripts/dev_bootstrap.sh
 ```
 
 ### Local Check Gate
 ```bash
-make check
+PATH="$PWD/.local/bin:$PATH" make check
 ```
 This runs all module unit tests, `go vet`, and the configured linters. `make test`
 uses `-short` and clears application/test database selectors. Hosted CI is manual
 only and delegates to these same targets.
+
+Release builds reject any compiler that differs from the exact `go.mod` patch
+and record the Go executable hash in the build manifest. Contributors can run
+`go test` directly with another compiler, but that does not qualify its security
+or release artifacts. Version 0.0.145 is an unpublished security
+candidate; the existing v0.0.144 release assets remain unchanged until a separate
+reviewed release decision.
 
 ### Run Integration Tests
 Prepare a dedicated local PostgreSQL database named `reproq_test_<suffix>` and

@@ -4,7 +4,7 @@
 `reproq-worker` is a production-grade, deterministic background task execution service written in Go. It is designed to act as a scalable backend for Django 6.0's Tasks API, replacing traditional brokers like Celery or RQ with a Postgres-backed queue.
 
 ### Core Technologies
-- **Language**: Go 1.22+
+- **Language**: Exact patched Go version selected in `go.mod` for canonical checks/builds.
 - **Database**: PostgreSQL 15+ (Required for `SKIP LOCKED` support)
 - **Database Driver**: `jackc/pgx/v5`
 - **Executor**: External Python processes (invoked via `python -m`)
@@ -24,7 +24,8 @@ The project follows a modular Go structure:
 ## Building and Running
 
 ### Key Commands
-- **Build**: `go build -o reproq ./cmd/reproq`
+- **Local development build**: `make build` (not release qualified).
+- **Production artifacts and containers**: Follow [DEPLOYMENT.md](DEPLOYMENT.md); the canonical release builder owns compilation policy.
 - **Run Worker**: `./reproq worker --dsn "postgres://..."`
 - **Start Scheduler**: `./reproq beat`
 - **Replay Task**: `./reproq replay --dsn "postgres://..." --id 123` or `--spec-hash <hash>`
@@ -39,7 +40,7 @@ The project follows a modular Go structure:
 ### Development & Testing
 Automated via `Makefile`:
 - `make test`: Runs unit tests for executor and validator.
-- `make test-integration`: Spins up a Dockerized Postgres, applies migrations, and runs full lifecycle integration tests.
+- `make test-integration`: Tests an explicitly prepared loopback `reproq_test_*` database selected through `REPROQ_TEST_DATABASE_URL`; does not create infrastructure or apply migrations.
 - `make up`: Starts the Postgres container for local development.
 
 ## Development Conventions
@@ -59,11 +60,11 @@ To support the automated installation via `reproq-django`, releases must include
 - `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)
 - Keep only three tags/releases at any time; delete older tags/releases and their artifacts.
 
-### Build Command for AI Agents
-When major changes are made to the Go worker logic (internal/queue, internal/runner), agents should remind the user to rebuild or run:
-```bash
-go build -o reproq ./cmd/reproq
-```
+### Build and release authority
+
+Run `make build` for local development and follow [DEPLOYMENT.md](DEPLOYMENT.md)
+for reviewed production artifacts. Do not introduce an alternate compiler,
+platform matrix, or production build command in documentation or Dockerfiles.
 
 ### Current Behavioral Notes
 - Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).

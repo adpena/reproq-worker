@@ -27,7 +27,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24.x'
+        go-version-file: 'go.mod'
 
     - name: Install dependencies
       run: go mod download
@@ -41,7 +41,9 @@ jobs:
         PGPASSWORD: pass
 
     - name: Install configured linter
-      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+      run: |
+        make lint-install
+        echo "$PWD/.local/bin" >> "$GITHUB_PATH"
 
     - name: Local check targets
       run: make check

@@ -63,14 +63,39 @@ func newFixture(t *testing.T) fixture {
 	f.env = append(f.env, "PATH="+filepath.Join(dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"), "RELEASE_TEST_CALL_LOG="+f.log,
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
 	write(t, filepath.Join(f.root, "scripts/build_releases.sh"), string(script), 0o755)
+	toolGuard, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../scripts/check_tools.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(f.root, "scripts/check_tools.sh"), string(toolGuard), 0o755)
+	sourceGuard, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../scripts/release_source.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(f.root, "scripts/release_source.sh"), string(sourceGuard), 0o755)
 	write(t, filepath.Join(f.root, "cmd/reproq/main.go"), "package main\nconst Version = \"0.0.144\"\n", 0o644)
+	write(t, filepath.Join(f.root, "go.mod"), "module release-fixture\n\ngo 1.26.10\n", 0o644)
 	write(t, filepath.Join(f.root, ".gitignore"), "dist/\n", 0o644)
 	write(t, filepath.Join(f.root, "README.md"), "fixture\n", 0o644)
 	// The fake compiler is only for guard, cleanup, and checksum tests. Actual
 	// five-platform compilation/repeated-byte qualification runs separately.
 	write(t, filepath.Join(dir, "bin/go"), `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == version ]]; then echo 'go version go1.24.13 test/host'; exit 0; fi
+if [[ "$1" == version && "${2:-}" == -m ]]; then
+  target="$(sed -n 's/^test artifact //p' "$3")"
+  revision="$(git rev-parse HEAD)"
+  [[ "${CONTAINER_TEST_WRONG_REVISION:-}" != 1 ]] || revision=0000000000000000000000000000000000000000
+  printf '%s: go1.26.10\n' "$3"
+  printf '\tbuild\t%s\n' "vcs.revision=$revision" 'vcs.modified=false' "GOOS=${target%/*}" "GOARCH=${target#*/}" '-tags=prod' '-trimpath=true' 'CGO_ENABLED=0'
+  if [[ "${CONTAINER_TEST_COMMIT_BEFORE_DOCKER:-}" == 1 && "$target" == windows/amd64 ]]; then
+    printf 'owned fixture commit during metadata inspection\n' >> README.md
+    git add README.md
+    git -c user.name='Container Test' -c user.email=container-test@example.invalid -c commit.gpgsign=false commit --quiet -m 'owned fixture source advancement'
+  fi
+  exit 0
+fi
+if [[ "$1" == version ]]; then printf 'go version %s test/host\n' "${RELEASE_TEST_GO_VERSION:-go1.26.10}"; exit 0; fi
+if [[ "$1" == env && "$2" == GOVERSION ]]; then printf '%s\n' "${RELEASE_TEST_GO_VERSION:-go1.26.10}"; exit 0; fi
 [[ "$1" == build && "$CGO_ENABLED" == 0 && "$GOAMD64" == v1 && "$GOARM64" == v8.0 && "$GOTOOLCHAIN" == local && "$GOWORK" == off && "$GOENV" == off && -z "$GOFLAGS" && -z "$GOEXPERIMENT" ]]
 printf '%s/%s %s\n' "$GOOS" "$GOARCH" "$*" >> "$RELEASE_TEST_CALL_LOG"
 [[ "${RELEASE_TEST_FAIL_TARGET:-}" != "$GOOS/$GOARCH" ]] || exit 7
@@ -85,6 +110,7 @@ if [[ -n "${RELEASE_TEST_HIDE_SOURCE:-}" ]]; then
   git update-index "$RELEASE_TEST_HIDE_SOURCE" -- cmd/reproq/main.go
   printf '// hidden source change\n' >> cmd/reproq/main.go
 fi
+if [[ "${RELEASE_TEST_MUTATE_COMPILER:-}" == 1 ]]; then printf '\n# changed compiler\n' >> "$0"; fi
 `, 0o755)
 	f.git(t, "init", "--quiet")
 	f.commit(t)
@@ -107,6 +133,31 @@ func (f fixture) build(t *testing.T, wantSuccess bool, args ...string) string {
 		t.Fatalf("build %v: %v\n%s", args, err, out)
 	}
 	return string(out)
+}
+
+func TestCompilerMustMatchCommittedPatchBeforeBuild(t *testing.T) {
+	for _, version := range []string{"go1.26.9", "go1.25.10", "go1.27.0", "go1.27.3", "devel go1.28-fake", "go1.27rc1"} {
+		t.Run(version, func(t *testing.T) {
+			f := newFixture(t)
+			f.env = append(f.env, "RELEASE_TEST_GO_VERSION="+version)
+			f.build(t, false, "--unreleased", "--output", "dist/candidate")
+			if _, err := os.Stat(f.log); !os.IsNotExist(err) {
+				t.Fatalf("unsupported compiler reached build: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(f.root, "dist/candidate")); !os.IsNotExist(err) {
+				t.Fatalf("unsupported compiler created output: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompilerChangedDuringBuildRejected(t *testing.T) {
+	f := newFixture(t)
+	f.env = append(f.env, "RELEASE_TEST_MUTATE_COMPILER=1")
+	f.build(t, false, "--unreleased", "--output", "dist/candidate")
+	if _, err := os.Stat(filepath.Join(f.root, "dist/candidate")); !os.IsNotExist(err) {
+		t.Fatalf("compiler mutation published output: %v", err)
+	}
 }
 
 func TestCandidateArtifactsAndChecksums(t *testing.T) {
@@ -135,6 +186,10 @@ func TestCandidateArtifactsAndChecksums(t *testing.T) {
 	manifest, err := os.ReadFile(filepath.Join(output, "BUILD-MANIFEST.txt"))
 	if err != nil || !strings.Contains(string(manifest), "release_status=UNRELEASED\n") || !strings.Contains(string(manifest), "source_revision="+f.git(t, "rev-parse", "HEAD")+"\n") {
 		t.Fatalf("candidate identity: %s, %v", manifest, err)
+	}
+	compiler, err := os.ReadFile(filepath.Join(filepath.Dir(f.root), "bin/go"))
+	if err != nil || !strings.Contains(string(manifest), fmt.Sprintf("go_binary_sha256=%x\n", sha256.Sum256(compiler))) {
+		t.Fatalf("compiler identity missing: %s, %v", manifest, err)
 	}
 	calls, err := os.ReadFile(f.log)
 	if err != nil || len(strings.Split(strings.TrimSpace(string(calls)), "\n")) != 5 {

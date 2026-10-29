@@ -6,41 +6,56 @@ This document outlines the strategy for building and releasing the Go worker bin
 To ensure the `reproq-django` install command can find the correct binary, assets in GitHub Releases must follow this pattern:
 `reproq-{os}-{arch}` (optionally with `.exe` for Windows).
 
-Example filenames:
-- `reproq-darwin-arm64`
-- `reproq-darwin-amd64`
-- `reproq-linux-amd64`
-- `reproq-linux-arm64`
-- `reproq-windows-amd64.exe`
+The canonical builder records its supported platforms and exact asset names in
+the output manifest and checksum set.
 
-## 2. Automated Build Script
-Use the existing `scripts/build_releases.sh` to automate cross-compilation:
+## 2. Canonical artifacts
+
+Follow the [README release instructions](README.md#-installation).
+`scripts/build_releases.sh` is the sole build-policy and platform-list authority;
+`go.mod` selects the exact compiler patch and the CLI's `Version` constant selects
+the worker version. Use `make build` only for a local development binary.
+
+## 3. Manual release workflow
+
+The existing `.github/workflows/release.yml` runs only by manual dispatch. It
+requires a separately reviewed existing tag matching the source and creates an
+unpublished draft from canonical artifacts. It refuses an existing release.
+Review local checks, artifacts, checksums, and runtime evidence before a separate
+publication decision. It does not publish automatically when a tag is pushed.
+
+## Runtime container
+
+After building a canonical bundle from the clean committed source:
 
 ```bash
-#!/bin/bash
-VERSION=$(git describe --tags)
-platforms=("darwin/amd64" "darwin/arm64" "linux/amd64" "linux/arm64" "windows/amd64")
-
-for platform in "${platforms[@]}"
-do
-    platform_split=(${platform//\// })
-    GOOS=${platform_split[0]}
-    GOARCH=${platform_split[1]}
-    output_name="reproq-$GOOS-$GOARCH"
-    if [ $GOOS = "windows" ]; then
-        output_name+='.exe'
-    fi
-
-    echo "Building $output_name..."
-    env GO111MODULE=on GOOS=$GOOS GOARCH=$GOARCH go build -tags prod -o "dist/$output_name" ./cmd/reproq
-done
+make container-build ARTIFACTS=dist/candidate IMAGE=reproq-worker:local
+# Optional explicit Docker target; the manifest determines supported platforms:
+make container-build ARTIFACTS=dist/candidate IMAGE=reproq-worker:local PLATFORM=linux/arm64
 ```
 
-## 3. GitHub Actions Integration
-The `.github/workflows/release.yml` should be implemented to:
-1.  Trigger on a new tag (e.g., `v*`).
-2.  Run the build script.
-3.  Create a GitHub Release and upload all files from `dist/` as assets.
+The wrapper verifies the manifest, checksum set, binary build metadata, and exact
+source association before sending an owned minimal context to Docker. Docker's
+`TARGETOS`/`TARGETARCH` choose an artifact listed in that manifest. The runtime-only
+Dockerfile verifies copied bytes again and includes their build manifest. The
+official Alpine runtime is pinned by digest; updating it requires registry and
+CA-bundle verification. These commands load an image locally and never push it.
+
+The image retains a shell, public CA bundle, and SQL migrations. As with the old
+image, it contains no Django project or Python environment: install the canonical
+worker in your project's own runtime for real Python task execution.
+
+For the existing local mock worker and database:
+
+```bash
+REPROQ_CONTAINER_IMAGE=reproq-worker:local docker compose up -d worker
+```
+
+Compose uses a local image and refuses registry pulls. `make up` still starts only
+the local database. Apply the baseline schema deliberately before starting a
+worker; these commands do not run production migrations. The obsolete `loadgen`
+service was removed because its `/app/loadgen` executable never existed. The
+separate development tool is `cmd/torture` (see [GEMINI.md](GEMINI.md#torture-tool-separate-binary)).
 
 ## 4. Database Migrations
 If you manage the schema directly from this repo, apply the baseline SQL migration:
