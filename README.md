@@ -14,9 +14,9 @@ Reproq Worker is a production-grade, deterministic background task runner. It wo
 If you're using Reproq Django, the easiest path is:
 
 ```bash
-python manage.py reproq install
-python manage.py reproq migrate-worker
-python manage.py reproq worker
+uv run python manage.py reproq install
+uv run python manage.py migrate reproq_django --database default
+uv run python manage.py reproq worker
 ```
 
 ---
@@ -26,10 +26,18 @@ python manage.py reproq worker
 | Component | Supported |
 | :--- | :--- |
 | Django | 6.x via `reproq-django` |
-| Python (executor env) | 3.12+ |
-| Reproq Django | Latest release (install/upgrade via `python manage.py reproq install` or `upgrade`) |
+| Python (executor env) | 3.12–3.15 with a compatible ReproQ Django environment |
+| Schema / executor protocol | `reproq-schema-v2` / protocol `2` |
+| Reproq Django | The SDK release declaring that exact schema and executor protocol |
 
-Keep the worker and reproq-django releases aligned; use `python manage.py reproq doctor` to verify the binary, schema, and DSN.
+Keep the worker and reproq-django releases aligned; use `python manage.py reproq doctor` to verify the binary, schema, and DSN. `reproq capabilities` reports the worker's JSON compatibility contract without opening a database. Before registering or claiming tasks, a Python worker probes the configured executor's `--capabilities` response and refuses an incompatible environment.
+
+Set `REPROQ_DATABASE_URL` for the Go queue connection. The Python application's
+business `DATABASE_URL` remains unchanged when tasks run, so a separate queue
+database cannot silently replace the application's default database. This
+protocol 2 candidate retires generic `DATABASE_URL` as a Go configuration input;
+explicit `--dsn` and file `dsn` settings remain supported. Precedence is file,
+then `REPROQ_DATABASE_URL`, then an explicit flag.
 
 ---
 
@@ -102,16 +110,22 @@ Starts the task processing daemon. It polls the database for `READY` tasks and e
 ```
 
 ### `beat`
-Starts the periodic task scheduler. **Run only one instance per database.**
+Starts the periodic task scheduler for definitions assigned to the `go` provider.
 
 ```bash
 ./reproq beat --dsn "postgres://..." --interval 30s
 ./reproq beat --dsn "postgres://..." --once
 ```
 Use `--once` for cron-driven or low-memory environments.
-Beat reads the `periodic_tasks` table and enqueues due runs using `FOR UPDATE SKIP LOCKED`.
-Cron evaluation is UTC-based to match Django's `timezone.now()` defaults.
+Beat locks due definitions with `FOR UPDATE SKIP LOCKED`, then calls the single Django migration-owned SQL enqueue function. The occurrence identity is the definition name plus its nominal UTC instant; a completed, failed or cancelled occurrence is never recreated by that identity. Independent occurrences may overlap even when their canonical task hashes match.
+
+An overdue Go definition produces one occurrence for its stored `next_run_at`, then advances to the first cron instant after database time. Unzoned expressions use UTC; `TZ=` / `CRON_TZ=` expressions preserve their named zone and daylight-saving behavior. Optional `pg_cron` definitions call the same SQL function with a UTC trigger-minute identity and use the native provider's late/missed-trigger behavior. Go beat leaves those definitions alone. The SDK owns registration and explicit provider assignment; historical `unassigned` definitions require an operator decision before scheduling.
 Set `REPROQ_MEMORY_LOG_INTERVAL=60s` to capture beat memory stats.
+
+Schedules use the shared `portable-cron-v1` contract: five fields, numeric or
+three-letter names, lists, ascending ranges, and positive field-bounded steps
+on wildcards or explicit ranges. Sunday is 0. Wrapping ranges, macros, L/#/?,
+and single-value N/step extensions are rejected consistently with the SDK.
 
 ### `replay`
 Manually re-enqueues a task by result ID or spec hash (latest match).
@@ -122,12 +136,27 @@ Manually re-enqueues a task by result ID or spec hash (latest match).
 ```
 
 ### `cancel`
-Request cancellation of a running task.
+Cancel pending work immediately, or request cooperative cancellation of a running task.
 
 ```bash
 ./reproq cancel --dsn "..." --id 12345
 ```
-Cancellation is enforced on the next worker heartbeat; cancelled runs are recorded as `FAILED` with a `kind=cancelled` error payload.
+`READY` / `WAITING` tasks become `CANCELLED` atomically, including explicit
+retirement of legacy pending work without relabeling its payload/version.
+Running cancellation is cooperative and observed on worker heartbeat. A request
+wins a concurrent success acknowledgment; the lease token is cleared when the
+run leaves `RUNNING`. Pending cancellation, failure and reclaim share workflow
+finalization. Repeated or terminal cancellation leaves history unchanged.
+
+### `reclaim`
+Inspect or recover expired claims through the same transition used by automatic worker reclaim:
+
+```bash
+./reproq reclaim --dry-run --json --older-than 5m --limit 100
+./reproq reclaim --action requeue --older-than 5m --limit 100 --json
+```
+
+Set `REPROQ_DATABASE_URL` in the process environment. `--action fail` terminally fails eligible claims; `requeue` respects each task's stored attempt budget. Expired cancelled claims become `CANCELLED`. `--include-null-lease` explicitly includes legacy `RUNNING` rows without a lease timestamp. A zero limit is unbounded; dry runs make no row changes. No application startup or Python workflow reimplementation is needed.
 
 ### `triage`
 List, inspect, and retry failed tasks.
@@ -182,7 +211,7 @@ See `reproq.example.yaml` and `reproq.example.toml` for full templates.
 | Flag | Env Var | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--config` | `REPROQ_CONFIG` | - | Path to a YAML/TOML config file. |
-| `--dsn` | `DATABASE_URL` | - | PostgreSQL connection string. Required unless set in `DATABASE_URL` or the config file. |
+| `--dsn` | `REPROQ_DATABASE_URL` | - | PostgreSQL connection string. Required unless set in `REPROQ_DATABASE_URL` or the config file. |
 | `--worker-id` | `WORKER_ID` | `hostname-pid` | Unique identifier for this worker node. Used for heartbeats. |
 | `--process-role` | `REPROQ_PROCESS_ROLE` | `worker` | Role label added to event metadata (for example: `worker`, `beat`). |
 | `--queues` | `QUEUE_NAMES` | `default` | Comma-separated list of queue names to poll. |
@@ -217,6 +246,17 @@ The log file is plaintext with `STDOUT:`/`STDERR:` headers; `python manage.py re
 Structured logs redact payload and secret-like fields by key name.
 `--payload-mode inline` exposes payload data in process args; prefer `stdin` or `file` for sensitive payloads. Production builds (`-tags prod`) reject `inline`.
 Config files can also set fields that do not have CLI flags, including poll backoff, executor module, payload limits, and timeouts.
+
+Executor payload, stdout, and stderr byte limits must be positive. The worker
+passes its payload and stdout limits to the Python executor; stdout must contain
+one complete UTF-8 JSON result, including its final newline, within the limit.
+Overflow, ambiguous results, and a nonzero process exit cannot produce success.
+Task logs drain through stderr with bounded retention; truncation records the
+exact raw bytes retained and dropped, with a small diagnostic marker in addition
+to the retained text. Positive per-task `timeout_seconds` overrides the worker's
+default execution timeout. Both infrastructure and task failures consume the
+stored attempt budget. Cancellation terminates the owned subprocess group (a
+Job Object on Windows), and pipe draining and worker shutdown are bounded.
 
 ### Worker Tuning
 | Flag | Default | Description |
@@ -257,9 +297,17 @@ The worker uses a `FOR UPDATE SKIP LOCKED` query to atomically claim tasks.
 3. **Concurrency Control**: It respects `lock_key` plus `concurrency_key`/`concurrency_limit` caps.
 4. **Queue Pauses**: It skips queues marked paused in `reproq_queue_controls`.
 
+A nonempty concurrency key always participates in shared arbitration. Its
+effective capacity is the smallest positive limit supplied by the candidate or
+any active member. Zero contributes no cap and still counts as an active member;
+with no positive cap, the group is unbounded. A lower limit waits until enough
+active members finish.
+
 ### Heartbeats & Recovery
+- **Fencing**: Each claim receives a new UUID token. Heartbeat and completion require that exact token, worker owner, `RUNNING` status and an unexpired lease measured by the database clock.
 - **Heartbeat**: While a task runs, the worker updates its `leased_until` timestamp every `heartbeat-seconds`.
-- **Reclaim**: If a worker crashes, its tasks will eventually expire (`leased_until < NOW`). Another worker (the "reclaimer") will detect this and reset the task status to `READY` (if attempts remain) or `FAILED`.
+- **Reclaim**: Expired claims return to `READY` if their stored attempt budget permits, or become `FAILED` / `CANCELLED`. Every exit from `RUNNING` clears owner, token and lease. Late work from an earlier claim cannot acknowledge a newer attempt.
+- **Canonical tasks**: Version 1 runs execute the SDK's stored canonical bytes after hash, semantic JSON and operational projection checks. Historical version 0 runs keep their original payload and hash. This runtime refuses to claim, retry or replay legacy work before spending an attempt or creating a lease. Drain queued legacy work with the old runtime before cutover, or reconcile it through an explicitly audited operator action. Terminal history remains readable; startup never rewrites it.
 
 ---
 
@@ -321,7 +369,9 @@ reviewed release decision.
 
 ### Run Integration Tests
 Prepare a dedicated local PostgreSQL database named `reproq_test_<suffix>` and
-apply `migrations/000001_baseline.up.sql` with your selected PostgreSQL client.
+apply ReproQ Django's committed migrations from a configured Django project.
+Its queue alias must select that exact test database. Go owns no schema DDL;
+an existing legacy schema requires the SDK's guarded adoption procedure first.
 Set `REPROQ_TEST_DATABASE_URL` to that database's connection string, then run:
 ```bash
 make test-integration
@@ -329,7 +379,7 @@ make bench BENCHTIME=100x
 ```
 The test guard accepts only explicit loopback hosts and the `reproq_test_`
 database prefix, including all connection fallbacks. It never uses ambient
-`DATABASE_URL`. Integration tests clear queue tables in this dedicated database;
+`REPROQ_DATABASE_URL`. Integration tests clear queue tables in this dedicated database;
 the claim benchmark creates a unique queue and deletes only its owned fixtures.
 Every reported benchmark iteration must claim one owned RUNNING task.
 
@@ -338,13 +388,10 @@ They fail if the explicit test connection is absent or unsafe. Queue integration
 tests verify real PostgreSQL state transitions; end-to-end Python execution and
 whole-service resource qualification require their own workload evidence.
 
-### Torture Test
-A separate enqueue-only command can seed a disposable database. It does not
-verify task completion or establish worker throughput. It has no test guard;
-never point it at an application database.
-```bash
-go run ./cmd/torture --dsn $DATABASE_URL --count 1000
-```
+Generate execution workloads through the SDK enqueue APIs so they use the same
+canonical producer as the application. The obsolete Go synthetic producer has
+been retired. The owned claim benchmark above qualifies claim behavior only;
+execution throughput requires completed workload receipts.
 
 ## License
 

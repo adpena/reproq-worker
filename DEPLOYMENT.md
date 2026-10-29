@@ -41,7 +41,7 @@ Dockerfile verifies copied bytes again and includes their build manifest. The
 official Alpine runtime is pinned by digest; updating it requires registry and
 CA-bundle verification. These commands load an image locally and never push it.
 
-The image retains a shell, public CA bundle, and SQL migrations. As with the old
+The image retains a shell and public CA bundle. As with the old
 image, it contains no Django project or Python environment: install the canonical
 worker in your project's own runtime for real Python task execution.
 
@@ -52,24 +52,30 @@ REPROQ_CONTAINER_IMAGE=reproq-worker:local docker compose up -d worker
 ```
 
 Compose uses a local image and refuses registry pulls. `make up` still starts only
-the local database. Apply the baseline schema deliberately before starting a
+the local database. Apply committed ReproQ Django migrations before starting a
 worker; these commands do not run production migrations. The obsolete `loadgen`
-service was removed because its `/app/loadgen` executable never existed. The
-separate development tool is `cmd/torture` (see [GEMINI.md](GEMINI.md#torture-tool-separate-binary)).
+service was removed because its `/app/loadgen` executable never existed.
+Use SDK enqueue APIs to generate canonical workloads and `make bench` for owned
+Go claim benchmarks; the retired synthetic Go producer bypassed that authority.
 
 ## 4. Database Migrations
-If you manage the schema directly from this repo, apply the baseline SQL migration:
+ReproQ Django's committed migrations are the sole schema authority. From the
+configured Django project, migrate the selected queue database:
 
 ```bash
-psql "$DATABASE_URL" -f migrations/000001_baseline.up.sql
+uv run python manage.py migrate reproq_django --database <queue-alias>
 ```
 
-Notes:
-- The baseline uses `CREATE INDEX CONCURRENTLY`, so run it outside a transaction wrapper.
-- The `task_runs_task_path_not_empty` check is created as `NOT VALID` to avoid long table locks.
-  Validate it after backfilling `task_path` with:
-  `ALTER TABLE task_runs VALIDATE CONSTRAINT task_runs_task_path_not_empty;`
-- For existing data, backfill in batches (for example using `result_id` windows) before validating.
+Existing databases created by the retired Go SQL or partial historical Django
+migrations require [guarded schema adoption](https://github.com/adpena/reproq-django#6-run-migrations)
+before ordinary forward migrations. Drain old workers before activating fencing.
+Drain queued legacy `spec_version=0` work with the old runtime before cutover,
+or perform an explicitly audited reconciliation. The new worker refuses a
+selected legacy task without spending an attempt; replay/retry also refuse it.
+This is a deployment gate and can block a queue until an operator resolves it.
+Historical terminal rows remain readable with their original bytes and hashes.
+The worker performs no DDL and refuses a missing or incompatible schema contract,
+including temporary or shadow relations that could retarget queue operations.
 
 ## 5. Production Supervision
 The preferred method for managing Reproq in production is using **systemd**.

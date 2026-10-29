@@ -20,7 +20,7 @@ do not maintain another compilation loop here.
 - The JSON protocol between the Go worker and `python -m reproq_django.executor` is strict; update both sides together.
 
 ## Migration discipline
-- Schema changes require a new migration file in `migrations/`.
+- Schema changes require a forward migration in `reproq-django`, the sole DDL authority.
 - Update integration tests if the schema changes.
 
 ## Docs and CLI parity

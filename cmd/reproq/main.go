@@ -43,6 +43,8 @@ func main() {
 	switch os.Args[1] {
 	case "worker":
 		runWorker(os.Args[2:])
+	case "capabilities":
+		runCapabilities()
 	case "beat":
 		runBeat(os.Args[2:])
 	case "replay":
@@ -55,6 +57,8 @@ func main() {
 		runTriage(os.Args[2:])
 	case "prune":
 		runPrune(os.Args[2:])
+	case "reclaim":
+		runReclaim(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -62,7 +66,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: reproq <worker|beat|replay|limit|cancel|triage|prune|version> [args]")
+	fmt.Println("usage: reproq <worker|beat|replay|limit|cancel|triage|prune|reclaim|capabilities|version> [args]")
 }
 
 type metricsConfig struct {
@@ -217,7 +221,7 @@ func runWorker(args []string) {
 	fs.String("config", configPath, "Path to reproq config file")
 	metricsPort := fs.Int("metrics-port", metricsCfg.port, "Port to serve Prometheus metrics (0 to disable)")
 	metricsAddr := fs.String("metrics-addr", metricsCfg.addr, "Address to serve health/metrics (overrides --metrics-port)")
-	metricsToken := fs.String("metrics-auth-token", metricsCfg.authToken, "Bearer token required for /metrics and /healthz")
+	metricsToken := config.PrivateStringFlag(fs, "metrics-auth-token", metricsCfg.authToken, "Bearer token required for /metrics and /healthz")
 	metricsAllowCIDRs := fs.String("metrics-allow-cidrs", metricsCfg.allowCIDRs, "Comma-separated IP/CIDR allow-list for /metrics and /healthz")
 	metricsAuthLimit := fs.Int("metrics-auth-limit", metricsCfg.authLimit, "Unauthorized request limit per window")
 	metricsAuthWindow := fs.Duration("metrics-auth-window", metricsCfg.authWindow, "Window for unauthorized request rate limiting")
@@ -231,7 +235,7 @@ func runWorker(args []string) {
 	}
 
 	if cfg.DatabaseURL == "" {
-		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
+		log.Fatal("DSN required (use --dsn, REPROQ_DATABASE_URL, or config file)")
 	}
 
 	cfg.Version = Version
@@ -303,7 +307,10 @@ func runWorker(args []string) {
 		}
 	}
 
-	q := queue.NewService(pool)
+	q, err := queue.NewService(ctx, pool)
+	if err != nil {
+		log.Fatal(err)
+	}
 	exec := &executor.ShellExecutor{
 		PythonBin:       cfg.PythonBin,
 		ExecutorModule:  cfg.ExecutorModule,
@@ -368,13 +375,13 @@ func runBeat(args []string) {
 			beatInterval = parsed
 		}
 	}
-	if val := os.Getenv("DATABASE_URL"); val != "" {
+	if val := os.Getenv(config.QueueDatabaseEnv); val != "" {
 		beatDSN = val
 	}
 
 	fs := flag.NewFlagSet("beat", flag.ExitOnError)
 	fs.String("config", configPath, "Path to reproq config file")
-	dsn := fs.String("dsn", beatDSN, "Postgres DSN")
+	dsn := config.PrivateStringFlag(fs, "dsn", beatDSN, "Postgres DSN")
 	interval := fs.Duration("interval", beatInterval, "Polling interval for periodic tasks")
 	once := fs.Bool("once", false, "Enqueue due tasks once and exit")
 	if err := fs.Parse(args); err != nil {
@@ -382,7 +389,7 @@ func runBeat(args []string) {
 	}
 
 	if *dsn == "" {
-		log.Fatal("DSN required (use --dsn, DATABASE_URL, or config file)")
+		log.Fatal("DSN required (use --dsn, REPROQ_DATABASE_URL, or config file)")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -405,20 +412,27 @@ func runBeat(args []string) {
 	}
 	defer pool.Close()
 
-	q := queue.NewService(pool)
+	q, err := queue.NewService(ctx, pool)
+	if err != nil {
+		log.Fatal(err)
+	}
 	logger.Info("Starting reproq beat", "interval", *interval, "once", *once)
 
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
 	// Run once immediately
-	if n, err := q.EnqueueDuePeriodicTasks(ctx); err != nil {
-		logger.Error("Failed to enqueue periodic tasks", "error", err, "enqueued", n)
+	n, initialError := q.EnqueueDuePeriodicTasks(ctx)
+	if initialError != nil {
+		logger.Error("Failed to enqueue periodic tasks", "error", initialError, "enqueued", n)
 	} else if n > 0 {
 		logger.Info("Enqueued periodic tasks", "count", n)
 	}
 	if *once {
 		logger.Info("Beat run complete", "once", true)
+		if initialError != nil {
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -439,7 +453,7 @@ func runBeat(args []string) {
 
 func runReplay(args []string) {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 	id := fs.Int64("id", 0, "Result ID to replay")
 	specHash := fs.String("spec-hash", "", "Spec hash to replay (uses latest match)")
 	if err := fs.Parse(args); err != nil {
@@ -460,7 +474,10 @@ func runReplay(args []string) {
 	}
 	defer pool.Close()
 
-	q := queue.NewService(pool)
+	q, err := queue.NewService(ctx, pool)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if *specHash != "" {
 		sourceID, newID, err := q.ReplayBySpecHash(ctx, *specHash)
 		if err != nil {
@@ -486,7 +503,7 @@ func runLimit(args []string) {
 	switch args[0] {
 	case "set":
 		fs := flag.NewFlagSet("limit set", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		key := fs.String("key", "", "Rate limit key (queue:<name> | task:<path> | global)")
 		rate := fs.Float64("rate", 0, "Tokens per second")
 		burst := fs.Int("burst", 1, "Burst size")
@@ -505,14 +522,17 @@ func runLimit(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		if err := q.SetRateLimit(ctx, *key, *rate, *burst); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("Set rate limit %s: %0.2f tokens/sec, burst %d\n", *key, *rate, *burst)
 	case "ls":
 		fs := flag.NewFlagSet("limit ls", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		if err := fs.Parse(args[1:]); err != nil {
 			log.Fatal(err)
 		}
@@ -528,7 +548,10 @@ func runLimit(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		limits, err := q.ListRateLimits(ctx)
 		if err != nil {
 			log.Fatal(err)
@@ -543,7 +566,7 @@ func runLimit(args []string) {
 		}
 	case "rm":
 		fs := flag.NewFlagSet("limit rm", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		key := fs.String("key", "", "Rate limit key to delete")
 		if err := fs.Parse(args[1:]); err != nil {
 			log.Fatal(err)
@@ -560,7 +583,10 @@ func runLimit(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		deleted, err := q.DeleteRateLimit(ctx, *key)
 		if err != nil {
 			log.Fatal(err)
@@ -580,10 +606,14 @@ func runPrune(args []string) {
 	switch args[0] {
 	case "expired":
 		fs := flag.NewFlagSet("prune expired", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		limit := fs.Int("limit", 0, "Max tasks to delete (0 = no limit)")
 		dryRun := fs.Bool("dry-run", false, "Show count without deleting")
 		if err := fs.Parse(args[1:]); err != nil {
+			log.Fatal(err)
+		}
+
+		if err := queue.ValidatePruneLimit(*limit); err != nil {
 			log.Fatal(err)
 		}
 
@@ -598,7 +628,10 @@ func runPrune(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		count, err := q.PruneExpired(ctx, *limit, *dryRun)
 		if err != nil {
 			log.Fatal(err)
@@ -615,7 +648,7 @@ func runPrune(args []string) {
 
 func runCancel(args []string) {
 	fs := flag.NewFlagSet("cancel", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+	dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 	id := fs.Int64("id", 0, "Result ID to cancel")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -632,13 +665,16 @@ func runCancel(args []string) {
 	}
 	defer pool.Close()
 
-	q := queue.NewService(pool)
+	q, err := queue.NewService(ctx, pool)
+	if err != nil {
+		log.Fatal(err)
+	}
 	updated, err := q.RequestCancel(ctx, *id)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if updated == 0 {
-		fmt.Printf("No RUNNING task found for result_id %d\n", *id)
+		fmt.Printf("No new cancellation transition for result_id %d (missing, terminal or already requested)\n", *id)
 		return
 	}
 	fmt.Printf("Cancellation requested for task %d\n", *id)
@@ -653,7 +689,7 @@ func runTriage(args []string) {
 	switch args[0] {
 	case "list":
 		fs := flag.NewFlagSet("triage list", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		limit := fs.Int("limit", 50, "Max tasks to list")
 		queueName := fs.String("queue", "", "Filter by queue name")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -671,7 +707,10 @@ func runTriage(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		items, err := q.ListFailedTasks(ctx, *limit, *queueName)
 		if err != nil {
 			log.Fatal(err)
@@ -694,7 +733,7 @@ func runTriage(args []string) {
 		}
 	case "inspect":
 		fs := flag.NewFlagSet("triage inspect", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		id := fs.Int64("id", 0, "Result ID to inspect")
 		if err := fs.Parse(args[1:]); err != nil {
 			log.Fatal(err)
@@ -711,7 +750,10 @@ func runTriage(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		item, err := q.InspectFailedTask(ctx, *id)
 		if err != nil {
 			log.Fatal(err)
@@ -737,7 +779,7 @@ func runTriage(args []string) {
 		fmt.Printf("Errors JSON: %s\n", string(item.ErrorsJSON))
 	case "retry":
 		fs := flag.NewFlagSet("triage retry", flag.ExitOnError)
-		dsn := fs.String("dsn", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
 		id := fs.Int64("id", 0, "Result ID to retry")
 		all := fs.Bool("all", false, "Retry all failed tasks")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -758,7 +800,10 @@ func runTriage(args []string) {
 		}
 		defer pool.Close()
 
-		q := queue.NewService(pool)
+		q, err := queue.NewService(ctx, pool)
+		if err != nil {
+			log.Fatal(err)
+		}
 		var updated int64
 		if *all {
 			updated, err = q.RetryAllFailedTasks(ctx)

@@ -31,7 +31,7 @@ services:
     image: ${REPROQ_CONTAINER_IMAGE:-reproq-worker:local}
     pull_policy: never
     environment:
-      DATABASE_URL: postgres://user:pass@db:5432/reproq
+      REPROQ_DATABASE_URL: postgres://user:pass@db:5432/reproq
       EXEC_MODE: mock
       POLL_INTERVAL: 100ms
     depends_on:

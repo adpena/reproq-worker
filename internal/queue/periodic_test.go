@@ -3,149 +3,71 @@ package queue
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
-func TestParsePeriodicPayloadEnvelope(t *testing.T) {
-	raw := json.RawMessage(`{"args":[1,"a"],"kwargs":{"k":"v"}}`)
-	argsRaw, kwargsRaw, err := parsePeriodicPayload(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSchedulerUsesSharedSDKPortableCronContract(t *testing.T) {
+	var contract struct {
+		Version int      `json:"schema_version"`
+		Grammar string   `json:"grammar"`
+		Accept  []string `json:"accepted"`
+		Reject  []string `json:"rejected"`
 	}
-	var args []any
-	if err := json.Unmarshal(argsRaw, &args); err != nil {
-		t.Fatalf("args unmarshal: %v", err)
+	if err := json.Unmarshal([]byte(readContractFile(t, "cron_schedules.json")), &contract); err != nil || contract.Version != 1 || contract.Grammar != "portable-cron-v1" || len(contract.Accept) == 0 || len(contract.Reject) == 0 {
+		t.Fatal("shared SDK cron contract is incomplete")
 	}
-	if len(args) != 2 || args[0].(float64) != 1 || args[1].(string) != "a" {
-		t.Fatalf("unexpected args: %#v", args)
-	}
-	var kwargs map[string]any
-	if err := json.Unmarshal(kwargsRaw, &kwargs); err != nil {
-		t.Fatalf("kwargs unmarshal: %v", err)
-	}
-	if kwargs["k"].(string) != "v" {
-		t.Fatalf("unexpected kwargs: %#v", kwargs)
-	}
-}
-
-func TestParsePeriodicPayloadArgsOnly(t *testing.T) {
-	raw := json.RawMessage(`{"args":[true]}`)
-	argsRaw, kwargsRaw, err := parsePeriodicPayload(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var args []any
-	_ = json.Unmarshal(argsRaw, &args)
-	if len(args) != 1 || args[0].(bool) != true {
-		t.Fatalf("unexpected args: %#v", args)
-	}
-	var kwargs map[string]any
-	_ = json.Unmarshal(kwargsRaw, &kwargs)
-	if len(kwargs) != 0 {
-		t.Fatalf("expected empty kwargs, got: %#v", kwargs)
-	}
-}
-
-func TestParsePeriodicPayloadKwargsOnly(t *testing.T) {
-	raw := json.RawMessage(`{"kwargs":{"a":2}}`)
-	argsRaw, kwargsRaw, err := parsePeriodicPayload(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var args []any
-	_ = json.Unmarshal(argsRaw, &args)
-	if len(args) != 0 {
-		t.Fatalf("expected empty args, got: %#v", args)
-	}
-	var kwargs map[string]any
-	_ = json.Unmarshal(kwargsRaw, &kwargs)
-	if kwargs["a"].(float64) != 2 {
-		t.Fatalf("unexpected kwargs: %#v", kwargs)
-	}
-}
-
-func TestParsePeriodicPayloadArray(t *testing.T) {
-	raw := json.RawMessage(`["x", 3]`)
-	argsRaw, kwargsRaw, err := parsePeriodicPayload(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var args []any
-	_ = json.Unmarshal(argsRaw, &args)
-	if len(args) != 2 || args[0].(string) != "x" {
-		t.Fatalf("unexpected args: %#v", args)
-	}
-	var kwargs map[string]any
-	_ = json.Unmarshal(kwargsRaw, &kwargs)
-	if len(kwargs) != 0 {
-		t.Fatalf("expected empty kwargs, got: %#v", kwargs)
-	}
-}
-
-func TestParsePeriodicPayloadObject(t *testing.T) {
-	raw := json.RawMessage(`{"flag":true}`)
-	argsRaw, kwargsRaw, err := parsePeriodicPayload(raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var args []any
-	_ = json.Unmarshal(argsRaw, &args)
-	if len(args) != 0 {
-		t.Fatalf("expected empty args, got: %#v", args)
-	}
-	var kwargs map[string]any
-	_ = json.Unmarshal(kwargsRaw, &kwargs)
-	if kwargs["flag"].(bool) != true {
-		t.Fatalf("unexpected kwargs: %#v", kwargs)
-	}
-}
-
-func TestParsePeriodicPayloadInvalid(t *testing.T) {
-	_, _, err := parsePeriodicPayload(json.RawMessage(`"nope"`))
-	if err == nil {
-		t.Fatal("expected error for invalid payload")
-	}
-}
-
-func TestPeriodicSpecJSONKeys(t *testing.T) {
-	key := "user:1"
-	spec := periodicSpec{
-		TaskPath:         "app.tasks.sample",
-		Args:             json.RawMessage(`[1]`),
-		Kwargs:           json.RawMessage(`{"k":"v"}`),
-		QueueName:        "default",
-		Priority:         2,
-		ConcurrencyKey:   &key,
-		ConcurrencyLimit: 3,
-		PeriodicName:     "nightly",
-		ScheduledAt:      "2025-01-01T00:00:00Z",
-		Exec: execSpec{
-			TimeoutSeconds: 900,
-			MaxAttempts:    4,
-		},
-	}
-	raw, err := json.Marshal(spec)
-	if err != nil {
-		t.Fatalf("marshal spec: %v", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		t.Fatalf("unmarshal spec: %v", err)
-	}
-	keys := []string{
-		"task_path",
-		"args",
-		"kwargs",
-		"queue_name",
-		"priority",
-		"concurrency_key",
-		"concurrency_limit",
-		"periodic_name",
-		"scheduled_at",
-		"exec",
-	}
-	for _, k := range keys {
-		if _, ok := payload[k]; !ok {
-			t.Fatalf("missing key %q in spec payload", k)
+	now := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	for _, expression := range contract.Accept {
+		if _, err := nextPeriodicRun(expression, now); err != nil {
+			t.Fatalf("SDK-supported schedule refused: %q: %v", expression, err)
 		}
+	}
+	for _, expression := range contract.Reject {
+		if _, err := nextPeriodicRun(expression, now); err == nil {
+			t.Fatalf("SDK-unsupported schedule accepted: %q", expression)
+		}
+	}
+}
+
+func TestNamedCronZoneKeepsMidnightAcrossDaylightSavingChange(t *testing.T) {
+	expression := "CRON_TZ=America/Chicago 0 0 * * *"
+	first, err := nextPeriodicRun(expression, time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Equal(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC)) {
+		t.Fatalf("incorrect pre-transition midnight: %v", first)
+	}
+	second, err := nextPeriodicRun(expression, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Equal(time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC)) || second.Sub(first) != 25*time.Hour {
+		t.Fatalf("named timezone lost daylight-saving transition: %v", second)
+	}
+}
+
+func TestUnzonedCronUsesUTCAndTruncatedZoneIsRejected(t *testing.T) {
+	now := time.Date(2026, 10, 31, 23, 0, 0, 0, time.FixedZone("fixture", -6*60*60))
+	next, err := nextPeriodicRun("0 0 * * *", now)
+	if err != nil || !next.Equal(time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unzoned schedule inherited a connection timezone: %v %v", next, err)
+	}
+	for _, expression := range []string{"TZ=UTC", "CRON_TZ=America/Chicago"} {
+		if _, err := nextPeriodicRun(expression, now); err == nil {
+			t.Fatal("truncated timezone prefix accepted")
+		}
+	}
+}
+
+func TestPortableCronRejectsUpstreamExtensionsAndNormalizesTimezoneWhitespace(t *testing.T) {
+	now := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	for _, expression := range []string{"? * * * *", "+1 * * * *", "*/61 * * * *", "* */25 * * *", "0 0 * * 7", "0 0 * * FRI-MON", "0 0 L * *", "0 0 * * MON#2", "@daily"} {
+		if _, err := nextPeriodicRun(expression, now); err == nil {
+			t.Fatalf("unsupported cron accepted: %q", expression)
+		}
+	}
+	if next, err := nextPeriodicRun("CRON_TZ=UTC\t0\t0 * * *", now); err != nil || !next.Equal(now.Add(24*time.Hour)) {
+		t.Fatalf("portable whitespace changed timezone expression: %v %v", next, err)
 	}
 }

@@ -35,7 +35,7 @@ container-build:
 	@if test -n "$(PLATFORM)"; then bash scripts/build_container.sh --artifacts "$(ARTIFACTS)" --image "$(IMAGE)" --platform "$(PLATFORM)"; else bash scripts/build_container.sh --artifacts "$(ARTIFACTS)" --image "$(IMAGE)"; fi
 
 test: check-toolchain
-	@DATABASE_URL= REPROQ_TEST_DATABASE_URL= REPROQ_REQUIRE_TEST_DATABASE= go test -short -v ./...
+	@DATABASE_URL= REPROQ_DATABASE_URL= REPROQ_TEST_DATABASE_URL= REPROQ_REQUIRE_TEST_DATABASE= go test -short -v ./...
 
 vet: check-toolchain
 	go vet ./...
@@ -56,7 +56,7 @@ up:
 
 test-integration: check-toolchain
 	@test -n "$$REPROQ_TEST_DATABASE_URL" || { echo "Set REPROQ_TEST_DATABASE_URL to a prepared loopback reproq_test_* database." >&2; exit 2; }
-	@REPROQ_REQUIRE_TEST_DATABASE=1 go test -count=1 -v ./internal/queue
+	@REPROQ_REQUIRE_TEST_DATABASE=1 go test -count=1 -p=1 -v ./internal/queue ./cmd/reproq
 
 bench: check-toolchain
 	@test -n "$$REPROQ_TEST_DATABASE_URL" || { echo "Set REPROQ_TEST_DATABASE_URL to a prepared loopback reproq_test_* database." >&2; exit 2; }

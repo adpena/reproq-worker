@@ -1,59 +1,12 @@
 package queue
 
 import (
-	"errors"
-	"os"
-	"strings"
+	"context"
+	"reproq-worker/internal/testdatabase"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// Destructive queue tests never use the ambient application DATABASE_URL.
-func testDatabaseURL(tb testing.TB) string {
-	tb.Helper()
-	required := os.Getenv("REPROQ_REQUIRE_TEST_DATABASE") == "1"
-	if testing.Short() {
-		if required {
-			tb.Fatal("explicit integration checks cannot run with -short")
-		}
-		tb.Skip("database integration check excluded by -short")
-	}
-	dsn := os.Getenv("REPROQ_TEST_DATABASE_URL")
-	if dsn == "" {
-		if required {
-			tb.Fatal("REPROQ_TEST_DATABASE_URL is required for integration checks")
-		}
-		tb.Skip("REPROQ_TEST_DATABASE_URL not set")
-	}
-	if err := validateTestDatabaseURL(dsn); err != nil {
-		tb.Fatal(err)
-	}
-	return dsn
-}
-
-func validateTestDatabaseURL(dsn string) error {
-	config, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return errors.New("invalid test database configuration")
-	}
-	isLoopback := func(host string) bool {
-		return host == "127.0.0.1" || host == "localhost" || host == "::1"
-	}
-	if !isLoopback(config.ConnConfig.Host) {
-		return errors.New("test database host must be explicit loopback")
-	}
-	for _, fallback := range config.ConnConfig.Fallbacks {
-		if !isLoopback(fallback.Host) {
-			return errors.New("test database fallback hosts must all be loopback")
-		}
-	}
-	name := config.ConnConfig.Database
-	if !strings.HasPrefix(name, "reproq_test_") || name == "reproq_test_" {
-		return errors.New("test database name must use the dedicated reproq_test_ prefix")
-	}
-	return nil
-}
 
 func TestDatabaseSafetyGuard(t *testing.T) {
 	for _, tc := range []struct {
@@ -72,9 +25,31 @@ func TestDatabaseSafetyGuard(t *testing.T) {
 		{"remote fallback", "host=127.0.0.1,example.invalid dbname=reproq_test_guard", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := validateTestDatabaseURL(tc.dsn) == nil; got != tc.ok {
+			if got := testdatabase.ValidateURL(tc.dsn) == nil; got != tc.ok {
 				t.Fatalf("guard accepted=%v, want %v", got, tc.ok)
 			}
 		})
 	}
 }
+
+func testLeaseToken(tb testing.TB, pool *pgxpool.Pool, id int64) string {
+	tb.Helper()
+	var token string
+	if err := pool.QueryRow(context.Background(), "SELECT lease_token::text FROM public.task_runs WHERE result_id=$1", id).Scan(&token); err != nil {
+		tb.Fatal(err)
+	}
+	return token
+}
+
+func newTestService(tb testing.TB, pool *pgxpool.Pool) *Service {
+	tb.Helper()
+	service, err := NewService(context.Background(), pool)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return service
+}
+
+// Low-level SQL fixtures explicitly mark spec_version=1 to test queue state,
+// locks and fencing independently of execution. They do not qualify canonical
+// SDK serialization; that boundary uses the exact contracts/*.json artifacts.

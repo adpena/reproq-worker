@@ -18,7 +18,6 @@ FROM runtime-base
 WORKDIR /app
 COPY --from=verified /verified/reproq ./reproq
 COPY --from=verified /artifacts/BUILD-MANIFEST.txt ./BUILD-MANIFEST.txt
-COPY migrations/ ./migrations/
 ARG SOURCE_REVISION
 ARG WORKER_VERSION
 ARG RELEASE_STATUS

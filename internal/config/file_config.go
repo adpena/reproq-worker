@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -47,9 +50,40 @@ type WorkerFileConfig struct {
 	MaxStderrBytes         *int     `yaml:"max_stderr_bytes" toml:"max_stderr_bytes"`
 	LogsDir                string   `yaml:"logs_dir" toml:"logs_dir"`
 	ExecTimeout            string   `yaml:"exec_timeout" toml:"exec_timeout"`
-	MaxAttemptsDefault     *int     `yaml:"max_attempts_default" toml:"max_attempts_default"`
 	ShutdownTimeout        string   `yaml:"shutdown_timeout" toml:"shutdown_timeout"`
 	PriorityAgingFactor    *float64 `yaml:"priority_aging_factor" toml:"priority_aging_factor"`
+}
+
+// YAML normally coerces floats into ints. Byte budgets must be exact integers,
+// including values supplied through YAML aliases and merge mappings.
+func (w *WorkerFileConfig) UnmarshalYAML(node *yaml.Node) error {
+	var fields map[string]any
+	if err := node.Decode(&fields); err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	typeInfo := reflect.TypeFor[WorkerFileConfig]()
+	for index := 0; index < typeInfo.NumField(); index++ {
+		known[typeInfo.Field(index).Tag.Get("yaml")] = true
+	}
+	for name := range fields {
+		if !known[name] {
+			return fmt.Errorf("unknown worker config field %q; use the current configuration reference", name)
+		}
+	}
+	for _, name := range []string{"max_payload_bytes", "max_stdout_bytes", "max_stderr_bytes"} {
+		value, present := fields[name]
+		if !present {
+			continue
+		}
+		switch value.(type) {
+		case int, int64, uint64:
+		default:
+			return fmt.Errorf("worker.%s must be an integer", name)
+		}
+	}
+	type plain WorkerFileConfig
+	return node.Decode((*plain)(w))
 }
 
 type BeatFileConfig struct {
@@ -101,11 +135,21 @@ func LoadFileConfig(path string) (*FileConfig, error) {
 	var cfg FileConfig
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
 			return nil, fmt.Errorf("parse yaml config: %w", err)
 		}
 	case ".toml":
-		if err := toml.Unmarshal(data, &cfg); err != nil {
+		if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&cfg); err != nil {
+			var missing *toml.StrictMissingError
+			if errors.As(err, &missing) {
+				keys := []string{}
+				for _, field := range missing.Errors {
+					keys = append(keys, strings.Join(field.Key(), "."))
+				}
+				return nil, fmt.Errorf("unknown config fields: %s; use the current configuration reference", strings.Join(keys, ", "))
+			}
 			return nil, fmt.Errorf("parse toml config: %w", err)
 		}
 	default:
@@ -196,9 +240,6 @@ func ApplyFileConfig(cfg *Config, fileCfg *FileConfig) error {
 		}
 		cfg.ExecTimeout = parsed
 	}
-	if fileCfg.Worker.MaxAttemptsDefault != nil {
-		cfg.MaxAttemptsDefault = *fileCfg.Worker.MaxAttemptsDefault
-	}
 	if fileCfg.Worker.ShutdownTimeout != "" {
 		parsed, err := parseDurationField("worker.shutdown_timeout", fileCfg.Worker.ShutdownTimeout)
 		if err != nil {
@@ -210,7 +251,7 @@ func ApplyFileConfig(cfg *Config, fileCfg *FileConfig) error {
 		cfg.PriorityAgingFactor = *fileCfg.Worker.PriorityAgingFactor
 	}
 
-	return nil
+	return ValidateExecutionLimits(cfg.MaxPayloadBytes, cfg.MaxStdoutBytes, cfg.MaxStderrBytes, cfg.ExecTimeout)
 }
 
 func parseConfigFlag(args []string) (string, bool, error) {

@@ -31,7 +31,6 @@ worker:
   max_stderr_bytes: 1048576
   logs_dir: "" # Empty disables persisted logs.
   exec_timeout: "1h"
-  max_attempts_default: 3
   shutdown_timeout: "30s"
   priority_aging_factor: 60
 

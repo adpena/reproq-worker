@@ -1,5 +1,9 @@
 # Reproq Worker Backlog
 
+Historical completion notes below describe earlier releases. Protocol 2 retires
+Go's generic `DATABASE_URL` input in favor of `REPROQ_DATABASE_URL`, and retires
+the synthetic torture producer. Use the current README for supported behavior.
+
 ## Priority definitions
 P0: correctness or contract issues, CLI breaks, or partial implementations that mislead users.
 P1: operational safety, observability, and security posture improvements.

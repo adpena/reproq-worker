@@ -57,7 +57,7 @@ while IFS= read -r -d '' name; do
   cp -p "$name" "$context/$name"
   expected="$(git rev-parse "$revision:$name")"
   [[ "$(git hash-object --no-filters -- "$context/$name")" == "$expected" ]] || fail "source copy differs: $name"
-done < <(git ls-files -z -- Dockerfile scripts/verify_release_bundle.sh migrations)
+done < <(git ls-files -z -- Dockerfile scripts/verify_release_bundle.sh)
 sh scripts/verify_release_bundle.sh "$context/artifacts" "$manifest_sha" "$checksums_sha" >/dev/null
 require_source_identity
 arguments=(buildx build --load --tag "$image" --build-arg "EXPECTED_MANIFEST_SHA256=$manifest_sha"

@@ -26,7 +26,7 @@ func (s *Service) SetRateLimit(ctx context.Context, key string, tokensPerSecond 
 	}
 
 	query := `
-		INSERT INTO rate_limits (key, tokens_per_second, burst_size, current_tokens, last_refilled_at)
+		INSERT INTO public.rate_limits (key, tokens_per_second, burst_size, current_tokens, last_refilled_at)
 		VALUES ($1, $2, $3, $3, NOW())
 		ON CONFLICT (key) DO UPDATE SET
 			tokens_per_second = EXCLUDED.tokens_per_second,
@@ -41,7 +41,7 @@ func (s *Service) SetRateLimit(ctx context.Context, key string, tokensPerSecond 
 func (s *Service) ListRateLimits(ctx context.Context) ([]RateLimit, error) {
 	query := `
 		SELECT key, tokens_per_second, burst_size, current_tokens, last_refilled_at
-		FROM rate_limits
+		FROM public.rate_limits
 		ORDER BY key
 	`
 	rows, err := s.pool.Query(ctx, query)
@@ -65,7 +65,7 @@ func (s *Service) DeleteRateLimit(ctx context.Context, key string) (int64, error
 	if key == "" {
 		return 0, fmt.Errorf("key is required")
 	}
-	tag, err := s.pool.Exec(ctx, "DELETE FROM rate_limits WHERE key = $1", key)
+	tag, err := s.pool.Exec(ctx, "DELETE FROM public.rate_limits WHERE key = $1", key)
 	if err != nil {
 		return 0, err
 	}

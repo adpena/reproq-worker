@@ -29,7 +29,7 @@ func containerFixture(t *testing.T) fixture {
 set -euo pipefail
 [[ "$1" == buildx && "$2" == build && "$3" == --load ]]
 context="${!#}"
-[[ -d "$context/artifacts" && -f "$context/Dockerfile" && -f "$context/migrations/baseline.sql" ]]
+[[ -d "$context/artifacts" && -f "$context/Dockerfile" && ! -e "$context/migrations" ]]
 [[ ! -e "$context/.git" && ! -e "$context/.env" && ! -e "$context/go.mod" && ! -e "$context/README.md" ]]
 [[ -f "$context/scripts/verify_release_bundle.sh" && ! -e "$context/scripts/build_releases.sh" ]]
 printf '%s\n' "$@" > "$CONTAINER_TEST_CALL_LOG"

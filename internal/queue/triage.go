@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type FailedTaskSummary struct {
@@ -54,7 +57,7 @@ func (s *Service) ListFailedTasks(ctx context.Context, limit int, queueName stri
 			failed_at,
 			last_attempted_at,
 			finished_at
-		FROM task_runs
+		FROM public.task_runs
 		WHERE status = 'FAILED'
 	`
 
@@ -125,7 +128,7 @@ func (s *Service) InspectFailedTask(ctx context.Context, resultID int64) (*Faile
 			spec_json,
 			errors_json,
 			return_json
-		FROM task_runs
+		FROM public.task_runs
 		WHERE result_id = $1 AND status = 'FAILED'
 	`
 
@@ -163,56 +166,58 @@ func (s *Service) InspectFailedTask(ctx context.Context, resultID int64) (*Faile
 	return &detail, nil
 }
 
-// RetryFailedTask resets a failed task back to READY for execution.
+// RetryFailedTask resets a failed version 1 task back to READY for execution.
 func (s *Service) RetryFailedTask(ctx context.Context, resultID int64) (int64, error) {
-	query := `
-		UPDATE task_runs
-		SET status = 'READY',
-			run_after = NOW(),
-			attempts = 0,
-			started_at = NULL,
-			last_attempted_at = NULL,
-			finished_at = NULL,
-			return_json = NULL,
-			last_error = NULL,
-			failed_at = NULL,
-			leased_until = NULL,
-			leased_by = NULL,
-			cancel_requested = FALSE,
-			updated_at = NOW()
-		WHERE result_id = $1 AND status = 'FAILED'
-	`
-	result, err := s.pool.Exec(ctx, query, resultID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	return s.retryFailed(ctx, &resultID)
 }
 
-// RetryAllFailedTasks resets all failed tasks back to READY.
+// RetryAllFailedTasks is all-or-nothing: a legacy source refuses the operation
+// without resetting any attempts or consuming historical failure evidence.
 func (s *Service) RetryAllFailedTasks(ctx context.Context) (int64, error) {
-	query := `
-		UPDATE task_runs
-		SET status = 'READY',
-			run_after = NOW(),
-			attempts = 0,
-			started_at = NULL,
-			last_attempted_at = NULL,
-			finished_at = NULL,
-			return_json = NULL,
-			last_error = NULL,
-			failed_at = NULL,
-			leased_until = NULL,
-			leased_by = NULL,
-			cancel_requested = FALSE,
-			updated_at = NOW()
-		WHERE status = 'FAILED'
-	`
-	result, err := s.pool.Exec(ctx, query)
+	return s.retryFailed(ctx, nil)
+}
+
+func (s *Service) retryFailed(ctx context.Context, resultID *int64) (int64, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	defer func() { _ = tx.Rollback(ctx) }()
+	predicate := "status='FAILED'"
+	arguments := []any{}
+	if resultID != nil {
+		predicate += " AND result_id=$1"
+		arguments = append(arguments, *resultID)
+	}
+	// Materialize and lock targets in the database, then derive the gate and
+	// update from that exact set. Large queues do not allocate one Go ID per row.
+	var legacy, unsupported, changed int64
+	err = tx.QueryRow(ctx, `WITH targets AS MATERIALIZED (
+  SELECT result_id,spec_version FROM public.task_runs WHERE `+predicate+` ORDER BY result_id FOR UPDATE
+ ), changed AS (
+  UPDATE public.task_runs SET status='READY',run_after=clock_timestamp(),
+   attempts=0,started_at=NULL,last_attempted_at=NULL,finished_at=NULL,return_json=NULL,
+   last_error=NULL,failed_at=NULL,leased_until=NULL,leased_by=NULL,lease_token=NULL,
+   cancel_requested=FALSE,updated_at=clock_timestamp()
+  WHERE result_id IN (SELECT result_id FROM targets) AND status='FAILED'
+   AND NOT EXISTS(SELECT 1 FROM targets WHERE spec_version<>1)
+  RETURNING result_id
+ ) SELECT (SELECT count(*) FROM targets WHERE spec_version=0),
+  (SELECT count(*) FROM targets WHERE spec_version NOT IN(0,1)),
+  (SELECT count(*) FROM changed)`, arguments...).Scan(&legacy, &unsupported, &changed)
+	if err != nil {
+		return 0, err
+	}
+	if legacy > 0 {
+		return 0, ErrLegacySpec
+	}
+	if unsupported > 0 {
+		return 0, errors.New("unsupported task spec_version; install a compatible runtime before retrying")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return changed, nil
 }
 
 func nullStringPtr(value sql.NullString) *string {

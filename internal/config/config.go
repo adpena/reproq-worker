@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// QueueDatabaseEnv selects the worker queue without replacing the Python
+// application's business DATABASE_URL in an inherited executor environment.
+const QueueDatabaseEnv = "REPROQ_DATABASE_URL"
+
 type Config struct {
 	DatabaseURL string
 
@@ -50,8 +54,6 @@ type Config struct {
 
 	ExecTimeout time.Duration
 
-	MaxAttemptsDefault int
-
 	ShutdownTimeout time.Duration
 
 	PriorityAgingFactor float64 // How many seconds of waiting equals 1 priority point
@@ -60,7 +62,7 @@ type Config struct {
 
 func (c *Config) BindFlags(fs *flag.FlagSet) {
 
-	fs.StringVar(&c.DatabaseURL, "dsn", c.DatabaseURL, "Database connection string")
+	BindPrivateStringFlag(fs, "dsn", &c.DatabaseURL, "Database connection string from configuration or REPROQ_DATABASE_URL")
 
 	fs.StringVar(&c.WorkerID, "worker-id", c.WorkerID, "Unique worker ID")
 
@@ -132,8 +134,6 @@ func DefaultConfig() *Config {
 
 		ExecTimeout: 1 * time.Hour,
 
-		MaxAttemptsDefault: 3,
-
 		ShutdownTimeout: 30 * time.Second,
 
 		PriorityAgingFactor: 60.0,
@@ -143,7 +143,7 @@ func DefaultConfig() *Config {
 
 func ApplyEnv(c *Config) error {
 
-	if val := os.Getenv("DATABASE_URL"); val != "" {
+	if val := os.Getenv(QueueDatabaseEnv); val != "" {
 		c.DatabaseURL = val
 	}
 

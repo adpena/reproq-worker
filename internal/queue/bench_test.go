@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reproq-worker/internal/db"
+	"reproq-worker/internal/testdatabase"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 
 func BenchmarkClaim(b *testing.B) {
 	b.StopTimer()
-	dsn := testDatabaseURL(b)
+	dsn := testdatabase.URL(b)
 	ctx := context.Background()
 	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
@@ -25,7 +26,7 @@ func BenchmarkClaim(b *testing.B) {
 	}
 	b.Cleanup(pool.Close)
 	queueName, _ := seedBenchmarkTasks(b, pool, b.N)
-	service := NewService(pool)
+	service := newTestService(b, pool)
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.StartTimer()
@@ -74,10 +75,10 @@ func seedBenchmarkTasks(tb testing.TB, pool *pgxpool.Pool, n int) (string, func(
 			return nil, err
 		}
 		hash := sha256.Sum256(spec)
-		return []any{fmt.Sprintf("%x", hash), owner, string(spec), "READY", "contracts.benchmark_task"}, nil
+		return []any{fmt.Sprintf("%x", hash), owner, string(spec), "READY", "contracts.benchmark_task", 1}, nil
 	})
 	count, err := pool.CopyFrom(context.Background(), pgx.Identifier{"task_runs"},
-		[]string{"spec_hash", "queue_name", "spec_json", "status", "task_path"}, source)
+		[]string{"spec_hash", "queue_name", "spec_json", "status", "task_path", "spec_version"}, source)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func seedBenchmarkTasks(tb testing.TB, pool *pgxpool.Pool, n int) (string, func(
 }
 
 func TestBenchmarkFixtureCleanupPreservesOtherQueues(t *testing.T) {
-	dsn := testDatabaseURL(t)
+	dsn := testdatabase.URL(t)
 	pool, err := db.NewPool(context.Background(), dsn)
 	if err != nil {
 		t.Fatal(err)

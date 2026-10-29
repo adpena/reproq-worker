@@ -33,10 +33,6 @@ The project follows a modular Go structure:
 - **Prune Expired**: `./reproq prune expired --dsn "postgres://..."`
 - **Version**: `./reproq --version`
 
-### Torture Tool (Separate Binary)
-- **Run**: `go run ./cmd/torture --dsn "postgres://..." --count 1000`
-- **Build**: `go build -o reproq-torture ./cmd/torture`
-
 ### Development & Testing
 Automated via `Makefile`:
 - `make test`: Runs unit tests for executor and validator.
@@ -69,16 +65,17 @@ platform matrix, or production build command in documentation or Dockerfiles.
 ### Current Behavioral Notes
 - Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).
 - Worker registration uses the CLI `Version` constant.
-- Config reads `DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
+- Config reads `REPROQ_DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
 - Claiming respects `reproq_queue_controls` (paused queues) and `concurrency_key`/`concurrency_limit`.
-- Periodic payloads may be stored as `{"args": [...], "kwargs": {...}}` for recurring schedules.
+- Periodic definitions retain SDK canonical text/hash/version; Go and optional pg_cron call the same migration-owned occurrence function. Go selects only provider=go and preserves explicit cron zones. Historical unassigned definitions require explicit provider activation.
 
 ## Reliability Invariants
-- **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
+- **Fencing**: Heartbeats and terminal updates require owner, per-claim UUID token, RUNNING status and an unexpired database-clock lease. Every RUNNING exit clears the token; cancellation can win a late success.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
-- **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `READY`.
-- **Concurrency Guard**: Dedupes via `spec_hash` checks before enqueue; a partial unique index can reinforce this in Postgres.
-- **Concurrency Limits**: Enforced at claim time via `concurrency_key` + `concurrency_limit`.
+- **Lease Reaper**: Automatic and CLI reclaim share one Go helper. Stored attempt budget and cancellation determine READY, FAILED or CANCELLED; workflow finalization shares the completion helper.
+- **Occurrence Guard**: Periodic identity is definition plus nominal UTC instant across all statuses. Canonical task hash does not coalesce separate occurrences.
+- **Concurrency Limits**: Every nonempty concurrency key locks and counts, including zero-limit members. A fresh READ COMMITTED check uses the smallest positive candidate/active-member cap; no positive cap means unbounded.
+- **Schema Authority**: Committed Django migrations are the sole DDL owner. Require exact schema v2 and public relation/function binding before queue use; never repair a schema at runtime.
 
 ### Security Posture
 - **Validation**: All task module paths must be validated against an allow-list in `internal/executor/validator.go`.

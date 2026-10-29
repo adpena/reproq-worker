@@ -45,12 +45,12 @@ type Runner struct {
 
 type QueueService interface {
 	RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error
-	Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error)
+	Reclaim(ctx context.Context) (int64, error)
 	UpdateWorkerHeartbeat(ctx context.Context, id string) error
 	Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error)
-	Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error)
-	CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error
-	CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error
+	Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error)
+	CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error
+	CompleteFailure(ctx context.Context, resultID int64, workerID, leaseToken string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) (queue.TaskStatus, error)
 }
 
 func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *slog.Logger, publisher events.Publisher) *Runner {
@@ -69,6 +69,9 @@ func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *sl
 }
 
 func (r *Runner) Start(ctx context.Context) error {
+	if err := r.executor.CheckCompatibility(ctx); err != nil {
+		return fmt.Errorf("executor startup compatibility check failed: %w", err)
+	}
 	r.logger.Info("Starting reproq worker", "concurrency", r.cfg.MaxConcurrency, "queues", r.cfg.QueueNames)
 
 	hostname, _ := os.Hostname()
@@ -78,7 +81,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	if r.cfg.ReclaimIntervalSeconds > 0 {
 		reclaimStart := time.Now()
-		if reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault); err != nil {
+		if reclaimed, err := r.queue.Reclaim(ctx); err != nil {
 			r.logger.Warn("Failed to reclaim expired tasks", "error", err)
 		} else if reclaimed > 0 {
 			r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
@@ -94,7 +97,7 @@ func (r *Runner) Start(ctx context.Context) error {
 					return
 				case <-ticker.C:
 					reclaimStart := time.Now()
-					reclaimed, err := r.queue.Reclaim(ctx, r.cfg.MaxAttemptsDefault)
+					reclaimed, err := r.queue.Reclaim(ctx)
 					if err != nil {
 						r.logger.Warn("Failed to reclaim expired tasks", "error", err)
 					} else if reclaimed > 0 {
@@ -127,8 +130,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("Shutdown requested, waiting for tasks...")
-			r.wg.Wait()
-			return nil
+			return r.waitForTasks()
 		case r.pool <- struct{}{}:
 			// Acquired a slot in the pool
 			task, err := r.poll(ctx)
@@ -146,6 +148,28 @@ func (r *Runner) Start(ctx context.Context) error {
 			r.wg.Add(1)
 			go r.runTask(ctx, task)
 		}
+	}
+}
+
+func (r *Runner) waitForTasks() error {
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	default:
+	}
+	shutdownTimeout := r.cfg.ShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = config.DefaultConfig().ShutdownTimeout
+	}
+	timer := time.NewTimer(shutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("tasks did not stop within shutdown timeout %s", shutdownTimeout)
 	}
 }
 
@@ -206,48 +230,35 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 
 	logger := r.logger.With("result_id", task.ResultID, "spec_hash", task.SpecHash)
 
+	// The executor imports spec_json.task_path. A denormalized projection may
+	// accelerate queue queries, but must never authorize a different task.
+	payload, specErr := task.ExecutionPayload(r.cfg.MaxPayloadBytes)
 	specTaskPath := ""
-	if task.TaskPath != nil && *task.TaskPath != "" {
-		specTaskPath = *task.TaskPath
-	} else {
-		var err error
-		specTaskPath, err = r.extractTaskPath(task.SpecJSON)
-		if err != nil {
-			logger.Error("Invalid task spec", "error", err)
-			completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer compCancel()
-			r.failTask(completionCtx, task, err, "invalid_spec", "", false)
-			tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
-			tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
-			r.publishEvent("error", "task_invalid", "invalid task spec", task, "", map[string]string{
-				"reason": "invalid_spec",
-			})
-			return
-		}
+	if specErr == nil {
+		specTaskPath, specErr = r.extractTaskPath(payload)
 	}
-	if specTaskPath == "" {
-		err := errors.New("task_path missing")
+	if specErr == nil && task.TaskPath != nil && *task.TaskPath != specTaskPath {
+		specErr = errors.New("task_path projection does not match spec_json.task_path")
+	}
+	if specErr != nil {
+		err := specErr
 		logger.Error("Invalid task spec", "error", err)
 		completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer compCancel()
-		r.failTask(completionCtx, task, err, "invalid_spec", "", false)
-		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
-		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
-		r.publishEvent("error", "task_invalid", "task_path missing", task, "", map[string]string{
-			"reason": "missing_task_path",
-		})
+		if status, ack := r.failTask(completionCtx, task, err, "invalid_spec", "", false, nil); ack {
+			r.recordFailureCompletion(task, status)
+			r.publishEvent("error", "task_invalid", "invalid task spec", task, "", map[string]string{"reason": "invalid_spec", "status": string(status)})
+		}
 		return
 	}
 	if err := r.validator.Validate(specTaskPath); err != nil {
 		logger.Warn("Task rejected by validator", "task_path", specTaskPath, "error", err)
 		completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer compCancel()
-		r.failTask(completionCtx, task, err, "security_violation", specTaskPath, false)
-		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
-		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
-		r.publishEvent("warn", "task_rejected", "task rejected by validator", task, specTaskPath, map[string]string{
-			"reason": "security_violation",
-		})
+		if status, ack := r.failTask(completionCtx, task, err, "security_violation", specTaskPath, false, nil); ack {
+			r.recordFailureCompletion(task, status)
+			r.publishEvent("warn", "task_rejected", "task rejected by validator", task, specTaskPath, map[string]string{"reason": "security_violation", "status": string(status)})
+		}
 		return
 	}
 
@@ -270,7 +281,7 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 					return
 				case <-ticker.C:
 					heartbeatStart := time.Now()
-					cancelled, err := r.queue.Heartbeat(ctx, task.ResultID, r.cfg.WorkerID, r.cfg.LeaseSeconds)
+					cancelled, err := r.queue.Heartbeat(execCtx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, r.cfg.LeaseSeconds)
 					dbOpDuration.WithLabelValues("heartbeat").Observe(time.Since(heartbeatStart).Seconds())
 					if err != nil {
 						logger.Error("Heartbeat failed", "error", err)
@@ -290,7 +301,12 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 	}
 
 	execStart := time.Now()
-	env, stdout, stderr, err := r.executor.Execute(execCtx, task.ResultID, task.Attempts, task.SpecJSON, r.cfg.ExecTimeout)
+	timeout := r.cfg.ExecTimeout
+	if task.TimeoutSeconds > 0 {
+		timeout = time.Duration(task.TimeoutSeconds) * time.Second
+	}
+	env, stdout, stderr, err := r.executor.Execute(execCtx, executor.Claim{ResultID: task.ResultID, Attempt: task.Attempts, WorkerID: r.cfg.WorkerID, LeaseToken: task.LeaseToken}, payload, timeout)
+	cancel() // Stop heartbeat work before attempting a terminal transition.
 	execDuration.WithLabelValues(task.QueueName).Observe(time.Since(execStart).Seconds())
 
 	completionCtx, compCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -308,19 +324,27 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"worker_id": r.cfg.WorkerID,
 		})
 		completeStart := time.Now()
-		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, false, time.Now(), logsURI); err != nil {
-			logger.Error("Failed to mark cancellation", "error", err)
-		}
+		completionStatus, completionErr := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, errObj, false, time.Now(), logsURI)
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
-		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
-		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		if err := completionErr; err != nil {
+			logger.Error("Failed to mark cancellation", "error", err)
+			return
+		}
+		r.recordFailureCompletion(task, completionStatus)
 		r.publishEvent("warn", "task_cancelled", "task cancelled by request", task, specTaskPath, map[string]string{
-			"reason": "cancel_requested",
+			"reason": "cancel_requested", "status": string(completionStatus),
 		})
 		return
 	}
 
-	if err != nil {
+	// A normal task exception exits nonzero with an explicit failure envelope.
+	// Preserve its classification, while every other process failure is an
+	// infrastructure error and can never be accepted as task success.
+	if env == nil && err == nil {
+		err = errors.New("executor returned no result")
+	}
+	isTaskException := env != nil && !env.Ok && errors.Is(err, executor.ErrProcessExit) && !errors.Is(err, executor.ErrProtocol)
+	if err != nil && !isTaskException {
 		logger.Error("Execution pipeline error", "error", err)
 		// Internal infrastructure error or timeout
 		errObj, _ := json.Marshal(map[string]interface{}{
@@ -329,31 +353,40 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 			"at":      time.Now(),
 		})
 		completeStart := time.Now()
-		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, true, time.Now().Add(10*time.Second), logsURI); err != nil {
-			logger.Error("Failed to mark infra error", "error", err)
-		}
+		shouldRetry := task.Attempts < task.MaxAttempts
+		completionStatus, completionErr := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, errObj, shouldRetry, time.Now().Add(10*time.Second), logsURI)
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
-		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
+		if err := completionErr; err != nil {
+			logger.Error("Failed to mark infra error", "error", err)
+			return
+		}
+		r.recordFailureCompletion(task, completionStatus)
 		r.publishEvent("error", "task_infra_error", "execution infrastructure error", task, specTaskPath, map[string]string{
-			"reason": "infra_error",
+			"reason": "infra_error", "status": string(completionStatus),
 		})
 		return
 	}
 
 	if env.Ok {
-		logger.Info("Task successful")
-		tasksProcessed.WithLabelValues("success", task.QueueName).Inc()
-		tasksCompleted.WithLabelValues(task.QueueName, "success").Inc()
 		completeStart := time.Now()
-		if err := r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, env.Return, logsURI); err != nil {
-			logger.Error("Failed to mark success", "error", err)
-		}
+		completionErr := r.queue.CompleteSuccess(completionCtx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, env.Return, logsURI)
 		dbOpDuration.WithLabelValues("complete_success").Observe(time.Since(completeStart).Seconds())
+		if errors.Is(completionErr, queue.ErrCancelRequested) {
+			if status, ack := r.failTask(completionCtx, task, completionErr, "cancelled", specTaskPath, false, logsURI); ack {
+				r.recordFailureCompletion(task, status)
+				r.publishEvent("warn", "task_cancelled", "task cancelled by request", task, specTaskPath, nil)
+			}
+			return
+		}
+		if err := completionErr; err != nil {
+			logger.Error("Failed to mark success", "error", err)
+			return
+		}
+		logger.Info("Task successful")
+		r.recordCompletion(task, "success")
 		r.publishEvent("info", "task_success", "task completed", task, specTaskPath, nil)
 	} else {
 		logger.Warn("Task failed", "msg", env.Message)
-		tasksProcessed.WithLabelValues("failure", task.QueueName).Inc()
-		tasksCompleted.WithLabelValues(task.QueueName, "failure").Inc()
 		errObj, _ := json.Marshal(map[string]interface{}{
 			"kind":            "app_error",
 			"exception_class": env.ExceptionClass,
@@ -366,42 +399,60 @@ func (r *Runner) runTask(ctx context.Context, task *queue.TaskRun) {
 
 		shouldRetry := task.Attempts < task.MaxAttempts
 
-		// Exponential backoff: 2^attempt * base_delay (e.g. 30s)
-		// attempt_index 0 -> 30s
-		// attempt_index 1 -> 60s
-		// attempt_index 2 -> 120s
-		attemptIndex := task.Attempts - 1
-		if attemptIndex < 0 {
-			attemptIndex = 0
-		}
-		backoffSeconds := (1 << uint(attemptIndex)) * 30
-		if backoffSeconds > 3600 { // Cap at 1 hour
-			backoffSeconds = 3600
-		}
-
-		nextRun := time.Now().Add(time.Duration(backoffSeconds) * time.Second)
+		nextRun := time.Now().Add(retryBackoff(task.Attempts))
 		completeStart := time.Now()
-		if err := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, nextRun, logsURI); err != nil {
-			logger.Error("Failed to mark failure", "error", err)
-		}
+		completionStatus, completionErr := r.queue.CompleteFailure(completionCtx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, errObj, shouldRetry, nextRun, logsURI)
 		dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
+		if err := completionErr; err != nil {
+			logger.Error("Failed to mark failure", "error", err)
+			return
+		}
+		r.recordFailureCompletion(task, completionStatus)
 		eventType := "task_failed"
 		level := "error"
 		message := "task failed"
 		metadata := map[string]string{
-			"exception_class": env.ExceptionClass,
+			"exception_class": env.ExceptionClass, "status": string(completionStatus),
 		}
-		if shouldRetry {
+		if completionStatus == queue.StatusReady {
 			eventType = "task_retry"
 			level = "warn"
 			message = "task failed; retrying"
 			metadata["next_run"] = nextRun.Format(time.RFC3339Nano)
+		}
+		if completionStatus == queue.StatusCancelled {
+			eventType = "task_cancelled"
+			level = "warn"
+			message = "task cancelled by request"
 		}
 		if env.Message != "" {
 			metadata["error_message"] = env.Message
 		}
 		r.publishEvent(level, eventType, message, task, specTaskPath, metadata)
 	}
+}
+
+func retryBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 30 * time.Second
+	}
+	if attempt >= 8 {
+		return time.Hour
+	}
+	return (30 * time.Second) << uint(attempt-1)
+}
+
+func (r *Runner) recordFailureCompletion(task *queue.TaskRun, status queue.TaskStatus) {
+	if status == queue.StatusCancelled {
+		r.recordCompletion(task, "cancelled")
+	} else {
+		r.recordCompletion(task, "failure")
+	}
+}
+
+func (r *Runner) recordCompletion(task *queue.TaskRun, status string) {
+	tasksProcessed.WithLabelValues(status, task.QueueName).Inc()
+	tasksCompleted.WithLabelValues(task.QueueName, status).Inc()
 }
 
 func (r *Runner) publishEvent(level, eventType, message string, task *queue.TaskRun, taskPath string, metadata map[string]string) {
@@ -413,6 +464,15 @@ func (r *Runner) publishEvent(level, eventType, message string, task *queue.Task
 	}
 	if taskPath != "" {
 		metadata["task_path"] = taskPath
+	}
+	if task.PeriodicName != nil {
+		metadata["periodic_name"] = *task.PeriodicName
+	}
+	if task.ScheduledFor != nil {
+		metadata["scheduled_for"] = task.ScheduledFor.UTC().Format(time.RFC3339Nano)
+	}
+	if task.PeriodicProvider != nil {
+		metadata["scheduler_provider"] = *task.PeriodicProvider
 	}
 	if task.Attempts > 0 {
 		metadata["attempt"] = strconv.Itoa(task.Attempts)
@@ -435,25 +495,22 @@ func (r *Runner) publishEvent(level, eventType, message string, task *queue.Task
 	})
 }
 
-type taskSpec struct {
-	TaskPath string `json:"task_path"`
-}
-
 func (r *Runner) extractTaskPath(specJSON json.RawMessage) (string, error) {
 	if len(specJSON) == 0 {
 		return "", errors.New("spec_json is empty")
 	}
-	var spec taskSpec
+	var spec map[string]json.RawMessage
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return "", err
 	}
-	if spec.TaskPath == "" {
+	var taskPath string
+	if err := json.Unmarshal(spec["task_path"], &taskPath); err != nil || taskPath == "" {
 		return "", errors.New("spec_json missing task_path")
 	}
-	return spec.TaskPath, nil
+	return taskPath, nil
 }
 
-func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, kind string, taskPath string, shouldRetry bool) {
+func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, kind string, taskPath string, shouldRetry bool, logsURI *string) (queue.TaskStatus, bool) {
 	payload := map[string]interface{}{
 		"kind":    kind,
 		"message": err.Error(),
@@ -464,8 +521,12 @@ func (r *Runner) failTask(ctx context.Context, task *queue.TaskRun, err error, k
 	}
 	errObj, _ := json.Marshal(payload)
 	completeStart := time.Now()
-	_ = r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, errObj, shouldRetry, time.Now(), nil)
+	status, completionErr := r.queue.CompleteFailure(ctx, task.ResultID, r.cfg.WorkerID, task.LeaseToken, errObj, shouldRetry, time.Now(), logsURI)
 	dbOpDuration.WithLabelValues("complete_failure").Observe(time.Since(completeStart).Seconds())
+	if completionErr != nil {
+		r.logger.Error("Failed to acknowledge task failure", "result_id", task.ResultID, "error", completionErr)
+	}
+	return status, completionErr == nil
 }
 
 func (r *Runner) persistExecutionLogs(task *queue.TaskRun, stdout string, stderr string) *string {
