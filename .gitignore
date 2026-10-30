@@ -17,11 +17,13 @@
 # Local configuration/secrets
 .env
 DATABASE_URL
+REPROQ_DATABASE_URL
 
 # Reproq specific
 /reproq
 /reproq-*
 bin/
+dist/
 .gocache/
 
 # IDEs

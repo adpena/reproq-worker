@@ -1,5 +1,9 @@
 # Reproq Worker Backlog
 
+Historical completion notes below describe earlier releases. Protocol 2 retires
+Go's generic `DATABASE_URL` input in favor of `REPROQ_DATABASE_URL`, and retires
+the synthetic torture producer. Use the current README for supported behavior.
+
 ## Priority definitions
 P0: correctness or contract issues, CLI breaks, or partial implementations that mislead users.
 P1: operational safety, observability, and security posture improvements.
@@ -135,7 +139,7 @@ Acceptance criteria
 | Type | Feature |
 | Impact | Operators cannot inspect and retry failures at scale |
 | Status | Completed (2025-12-29) |
-| Touchpoints | `migrations/*.sql`, `cmd/reproq/main.go`, `internal/queue/queue.go`, `docs/features/DEAD_LETTER_QUEUE.md` |
+| Touchpoints | `reproq-django` committed migrations (sole queue schema authority), `cmd/reproq/main.go`, `internal/queue/queue.go`, `docs/features/DEAD_LETTER_QUEUE.md` |
 
 Problem
 There is no DLQ flow or triage tooling, despite the design doc.
@@ -144,11 +148,11 @@ Proposed solution
 Add `last_error` and `failed_at` columns, implement triage CLI commands (list/inspect/retry), and ensure retries reset attempts appropriately.
 
 Acceptance criteria
-- Migration adds `last_error` and `failed_at`.
+- Committed Django migrations add `last_error` and `failed_at`.
 - `reproq triage list` shows recent failures with summary data.
 - `reproq triage inspect <id>` shows full error payload.
 - `reproq triage retry <id|--all>` re-enqueues correctly.
-- Django models are updated if schema changes are shared.
+- Django models and committed migrations define shared schema changes.
 
 ### BL-007: Wire health and metrics HTTP server
 | Field | Value |

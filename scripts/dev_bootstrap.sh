@@ -15,10 +15,10 @@ export GOCACHE="${GOCACHE:-$root/.gocache}"
 echo "Downloading Go modules..."
 go mod download
 
-echo "Running unit tests..."
-go test ./internal/...
+echo "Running the local check gate..."
+make check
 
 echo "Building reproq worker..."
-go build -o reproq ./cmd/reproq
+make build
 
 echo "Done. Binary available at ./reproq"

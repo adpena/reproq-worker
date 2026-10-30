@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15
@@ -30,20 +28,12 @@ services:
       -c max_wal_size=4GB
 
   worker:
-    build: .
+    image: ${REPROQ_CONTAINER_IMAGE:-reproq-worker:local}
+    pull_policy: never
     environment:
-      DATABASE_URL: postgres://user:pass@db:5432/reproq
+      REPROQ_DATABASE_URL: postgres://user:pass@db:5432/reproq
       EXEC_MODE: mock
       POLL_INTERVAL: 100ms
-    depends_on:
-      db:
-        condition: service_healthy
-
-  loadgen:
-    build: .
-    entrypoint: ["/app/loadgen"]
-    environment:
-      DATABASE_URL: postgres://user:pass@db:5432/reproq
     depends_on:
       db:
         condition: service_healthy

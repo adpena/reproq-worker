@@ -1,5 +1,9 @@
 # Reproq Worker Roadmap
 
+Historical items below describe earlier releases. Current protocol 2 queue
+configuration uses `REPROQ_DATABASE_URL`; the Python business `DATABASE_URL`
+remains separate. The current README is the supported configuration reference.
+
 ## Scope and intent
 This roadmap converts current gaps and partial implementations into a sequenced delivery plan.
 Detailed items live in `docs/roadmap/BACKLOG.md`.

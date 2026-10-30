@@ -86,7 +86,7 @@ REQUIRED FEATURES:
 - Log execution lifecycle events
 
 TECHNICAL CONSTRAINTS:
-- Go 1.22+
+- Canonical Go checks/builds use the exact patched compiler selected in `go.mod`.
 - pgx or database/sql
 - No external queue systems
 - Clean package structure

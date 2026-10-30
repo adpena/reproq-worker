@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,6 +21,9 @@ func NewPool(ctx context.Context, connString string) (*pgxpool.Pool, error) {
 	config.MinConns = 2
 	config.MaxConnLifetime = time.Hour
 	config.MaxConnIdleTime = 30 * time.Minute
+	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
+		return RequireSchemaContract(ctx, connection)
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {

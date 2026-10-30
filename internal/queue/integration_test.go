@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
+	"reproq-worker/internal/testdatabase"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +15,7 @@ import (
 )
 
 func TestQueueIntegration(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -31,7 +28,7 @@ func TestQueueIntegration(t *testing.T) {
 	pool.Exec(ctx, "DELETE FROM task_runs")
 	pool.Exec(ctx, "DELETE FROM reproq_workers")
 
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	// 1. Enqueue Task
 	taskPath := "myapp.tasks.test"
@@ -39,8 +36,8 @@ func TestQueueIntegration(t *testing.T) {
 	specHash := "testhash64000000000000000000000000000000000000000000000000000000" // 64 chars
 	var resultID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, task_path)
-		VALUES ($1, 'default', $2, 'READY', NOW(), $3)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, task_path)
+		VALUES (1,$1, 'default', $2, 'READY', NOW(), $3)
 		RETURNING result_id
 	`, specHash, specJSON, taskPath).Scan(&resultID)
 	if err != nil {
@@ -64,7 +61,7 @@ func TestQueueIntegration(t *testing.T) {
 	}
 
 	// 3. Heartbeat
-	cancelled, err := s.Heartbeat(ctx, task.ResultID, workerID, 600)
+	cancelled, err := s.Heartbeat(ctx, task.ResultID, workerID, task.LeaseToken, 600)
 	if err != nil {
 		t.Errorf("heartbeat failed: %v", err)
 	}
@@ -73,23 +70,20 @@ func TestQueueIntegration(t *testing.T) {
 	}
 
 	// 4. Complete Success with Fencing (Correct Worker)
-	err = s.CompleteSuccess(ctx, task.ResultID, workerID, json.RawMessage(`{"res":"ok"}`), nil)
+	err = s.CompleteSuccess(ctx, task.ResultID, workerID, task.LeaseToken, json.RawMessage(`{"res":"ok"}`), nil)
 	if err != nil {
 		t.Errorf("completion failed: %v", err)
 	}
 
 	// 5. Verify Fencing (Wrong Worker tries to update completed task)
-	err = s.CompleteSuccess(ctx, task.ResultID, "wrong-worker", json.RawMessage(`{}`), nil)
+	err = s.CompleteSuccess(ctx, task.ResultID, "wrong-worker", task.LeaseToken, json.RawMessage(`{}`), nil)
 	if err == nil {
 		t.Error("expected fencing error for wrong worker, got nil")
 	}
 }
 
 func TestQueuePausePreventsClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -110,14 +104,14 @@ func TestQueuePausePreventsClaim(t *testing.T) {
 	}
 
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'paused', '{"task_path":"myapp.tasks.pause","args":[],"kwargs":{}}', 'READY', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after)
+		VALUES (1,$1, 'paused', '{"task_path":"myapp.tasks.pause","args":[],"kwargs":{}}', 'READY', NOW())
 	`, "pausehash"+strings.Repeat("0", 55))
 	if err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
 
-	s := NewService(pool)
+	s := newTestService(t, pool)
 	_, err = s.Claim(ctx, "w1", "paused", 60, 0)
 	if !errors.Is(err, ErrNoTasks) {
 		t.Fatalf("expected ErrNoTasks for paused queue, got %v", err)
@@ -125,10 +119,7 @@ func TestQueuePausePreventsClaim(t *testing.T) {
 }
 
 func TestConcurrencyLimitBlocksClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -141,15 +132,15 @@ func TestConcurrencyLimitBlocksClaim(t *testing.T) {
 
 	specJSON := `{"task_path":"myapp.tasks.limit","args":[],"kwargs":{}}`
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, concurrency_key, concurrency_limit)
-		VALUES ($1, 'default', $2, 'READY', NOW(), 'user:1', 1),
-		       ($3, 'default', $2, 'READY', NOW(), 'user:1', 1)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, concurrency_key, concurrency_limit)
+		VALUES (1,$1, 'default', $2, 'READY', NOW(), 'user:1', 1),
+		       (1,$3, 'default', $2, 'READY', NOW(), 'user:1', 1)
 	`, "limit1"+strings.Repeat("0", 58), specJSON, "limit2"+strings.Repeat("1", 58))
 	if err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
 
-	s := NewService(pool)
+	s := newTestService(t, pool)
 	task, err := s.Claim(ctx, "w1", "default", 60, 0)
 	if err != nil {
 		t.Fatalf("failed to claim first task: %v", err)
@@ -165,10 +156,7 @@ func TestConcurrencyLimitBlocksClaim(t *testing.T) {
 }
 
 func TestRetryLifecycle(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -178,14 +166,14 @@ func TestRetryLifecycle(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	// Enqueue with max_attempts = 2
 	var id int64
 	specHash := "retryhash" + strings.Repeat("0", 55)
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.retry"}', 'READY', NOW(), 2)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, max_attempts)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.retry"}', 'READY', NOW(), 2)
 		RETURNING result_id
 	`, specHash).Scan(&id)
 	if err != nil {
@@ -200,7 +188,7 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task, got nil")
 	}
-	err = s.CompleteFailure(ctx, task.ResultID, "w1", json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(-time.Second), nil)
+	_, err = s.CompleteFailure(ctx, task.ResultID, "w1", task.LeaseToken, json.RawMessage(`{"err":"msg"}`), true, time.Now().Add(-time.Second), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +208,8 @@ func TestRetryLifecycle(t *testing.T) {
 	if task == nil {
 		t.Fatal("expected task on attempt 2, got nil")
 	}
-	if err := s.CompleteFailure(ctx, task.ResultID, "w2", json.RawMessage(`{"err":"msg"}`), false, time.Now(), nil); err != nil {
+	// Even an infrastructure caller asking to retry must not exceed the budget.
+	if _, err := s.CompleteFailure(ctx, task.ResultID, "w2", task.LeaseToken, json.RawMessage(`{"err":"msg"}`), true, time.Now(), nil); err != nil {
 		t.Fatalf("failed to complete failure: %v", err)
 	}
 
@@ -231,10 +220,7 @@ func TestRetryLifecycle(t *testing.T) {
 }
 
 func TestPriorityAgingClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -244,22 +230,22 @@ func TestPriorityAgingClaim(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	// Case 1: Aging disabled, higher priority wins.
 	var highID int64
 	var lowID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
 		RETURNING result_id
 	`, "aging_high"+strings.Repeat("1", 54)).Scan(&highID)
 	if err != nil {
 		t.Fatalf("failed to enqueue high priority task: %v", err)
 	}
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
 		RETURNING result_id
 	`, "aging_low"+strings.Repeat("2", 55)).Scan(&lowID)
 	if err != nil {
@@ -279,16 +265,16 @@ func TestPriorityAgingClaim(t *testing.T) {
 
 	// Case 2: Aging enabled, older low-priority wins.
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 10, NOW())
 		RETURNING result_id
 	`, "aging_high2"+strings.Repeat("3", 53)).Scan(&highID)
 	if err != nil {
 		t.Fatalf("failed to enqueue high priority task: %v", err)
 	}
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.aging"}', 'READY', NOW(), 0, NOW() - INTERVAL '120 seconds')
 		RETURNING result_id
 	`, "aging_low2"+strings.Repeat("4", 54)).Scan(&lowID)
 	if err != nil {
@@ -305,10 +291,7 @@ func TestPriorityAgingClaim(t *testing.T) {
 }
 
 func TestRateLimitingClaim(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -319,13 +302,13 @@ func TestRateLimitingClaim(t *testing.T) {
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
 	pool.Exec(ctx, "DELETE FROM rate_limits")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	taskPath := "myapp.tasks.rate"
 	specJSON := `{"task_path":"myapp.tasks.rate","args":[],"kwargs":{}}`
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at, task_path)
-		VALUES ($1, 'default', $2, 'READY', NOW(), 0, NOW(), $3)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, priority, enqueued_at, task_path)
+		VALUES (1,$1, 'default', $2, 'READY', NOW(), 0, NOW(), $3)
 	`, "rate_limit"+strings.Repeat("5", 54), specJSON, taskPath)
 	if err != nil {
 		t.Fatalf("failed to enqueue task: %v", err)
@@ -374,10 +357,7 @@ func TestRateLimitingClaim(t *testing.T) {
 }
 
 func TestWorkflowChordRelease(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -388,23 +368,34 @@ func TestWorkflowChordRelease(t *testing.T) {
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
 	pool.Exec(ctx, "DELETE FROM rate_limits")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
-	workflowID := "11111111-1111-1111-1111-111111111111"
+	var workflowID string
+	if err := pool.QueryRow(ctx, "SELECT gen_random_uuid()::text").Scan(&workflowID); err != nil {
+		t.Fatalf("failed to allocate owned workflow ID: %v", err)
+	}
+	defer func() {
+		if _, err := pool.Exec(ctx, "DELETE FROM task_runs WHERE workflow_id=$1", workflowID); err != nil {
+			t.Errorf("failed to clean owned workflow tasks: %v", err)
+		}
+		if _, err := pool.Exec(ctx, "DELETE FROM workflow_runs WHERE workflow_id=$1", workflowID); err != nil {
+			t.Errorf("failed to clean owned workflow: %v", err)
+		}
+	}()
 
 	var id1 int64
 	var id2 int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at, leased_until, lease_token)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW(), NOW()+INTERVAL '1 minute', gen_random_uuid())
 		RETURNING result_id
 	`, "wf1"+strings.Repeat("a", 61), workflowID).Scan(&id1)
 	if err != nil {
 		t.Fatalf("failed to insert task 1: %v", err)
 	}
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, workflow_id, leased_by, started_at, leased_until, lease_token)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'RUNNING', NOW(), $2, 'w1', NOW(), NOW()+INTERVAL '1 minute', gen_random_uuid())
 		RETURNING result_id
 	`, "wf2"+strings.Repeat("b", 61), workflowID).Scan(&id2)
 	if err != nil {
@@ -413,8 +404,8 @@ func TestWorkflowChordRelease(t *testing.T) {
 
 	var callbackID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, workflow_id, wait_count)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'WAITING', NOW(), $2, 2)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, workflow_id, wait_count)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.workflow"}', 'WAITING', NOW(), $2, 2)
 		RETURNING result_id
 	`, "wf_cb"+strings.Repeat("c", 59), workflowID).Scan(&callbackID)
 	if err != nil {
@@ -429,7 +420,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Fatalf("failed to insert workflow run: %v", err)
 	}
 
-	if err := s.CompleteSuccess(ctx, id1, "w1", json.RawMessage(`{"ok": true}`), nil); err != nil {
+	if err := s.CompleteSuccess(ctx, id1, "w1", testLeaseToken(t, pool, id1), json.RawMessage(`{"ok": true}`), nil); err != nil {
 		t.Fatalf("complete success task 1: %v", err)
 	}
 
@@ -462,7 +453,7 @@ func TestWorkflowChordRelease(t *testing.T) {
 		t.Errorf("expected callback status WAITING, got %s", callbackStatus)
 	}
 
-	if err := s.CompleteSuccess(ctx, id2, "w1", json.RawMessage(`{"ok": true}`), nil); err != nil {
+	if err := s.CompleteSuccess(ctx, id2, "w1", testLeaseToken(t, pool, id2), json.RawMessage(`{"ok": true}`), nil); err != nil {
 		t.Fatalf("complete success task 2: %v", err)
 	}
 
@@ -492,91 +483,8 @@ func TestWorkflowChordRelease(t *testing.T) {
 	}
 }
 
-func TestPeriodicTasks(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-
-	pool.Exec(ctx, "DELETE FROM task_runs")
-	pool.Exec(ctx, "DELETE FROM periodic_tasks")
-	s := NewService(pool)
-
-	// Create a periodic task (every minute)
-	pt := PeriodicTask{
-		Name:        "test_pt",
-		CronExpr:    "* * * * *",
-		TaskPath:    "myapp.pt",
-		PayloadJSON: json.RawMessage(`{"args":[1],"kwargs":{"a":1}}`),
-		QueueName:   "default",
-		Priority:    0,
-		MaxAttempts: 3,
-		Enabled:     true,
-	}
-	err = s.UpsertPeriodicTask(ctx, pt)
-	if err != nil {
-		t.Fatalf("failed to upsert periodic task: %v", err)
-	}
-
-	// Force it to be due
-	pool.Exec(ctx, "UPDATE periodic_tasks SET next_run_at = NOW() - INTERVAL '1 minute'")
-
-	// Enqueue due tasks
-	n, err := s.EnqueueDuePeriodicTasks(ctx)
-	if err != nil {
-		t.Fatalf("failed to enqueue due tasks: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("expected 1 task enqueued, got %d", n)
-	}
-
-	// Verify task exists in task_runs
-	var count int
-	pool.QueryRow(ctx, "SELECT COUNT(*) FROM task_runs WHERE status = 'READY'").Scan(&count)
-	if count != 1 {
-		t.Errorf("expected 1 task in task_runs, got %d", count)
-	}
-
-	var taskPath string
-	var specJSON json.RawMessage
-	err = pool.QueryRow(ctx, "SELECT task_path, spec_json FROM task_runs WHERE status = 'READY' LIMIT 1").Scan(&taskPath, &specJSON)
-	if err != nil {
-		t.Fatalf("failed to read periodic task run: %v", err)
-	}
-	if taskPath != "myapp.pt" {
-		t.Fatalf("expected task_path myapp.pt, got %q", taskPath)
-	}
-	var spec map[string]any
-	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		t.Fatalf("failed to parse spec_json: %v", err)
-	}
-	if spec["periodic_name"] != "test_pt" {
-		t.Fatalf("expected periodic_name test_pt, got %#v", spec["periodic_name"])
-	}
-	if _, ok := spec["scheduled_at"]; !ok {
-		t.Fatalf("expected scheduled_at in spec_json, got %#v", spec)
-	}
-
-	// Verify next_run_at updated
-	var nextRun time.Time
-	pool.QueryRow(ctx, "SELECT next_run_at FROM periodic_tasks WHERE name = 'test_pt'").Scan(&nextRun)
-	if !nextRun.After(time.Now()) {
-		t.Error("expected next_run_at to be in the future")
-	}
-}
-
 func TestWorkerRegistration(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -586,7 +494,7 @@ func TestWorkerRegistration(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM reproq_workers")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	err = s.RegisterWorker(ctx, "w1", "host1", 10, []string{"q1"}, "1.0.0")
 	if err != nil {
@@ -606,10 +514,7 @@ func TestWorkerRegistration(t *testing.T) {
 }
 
 func TestRequestCancel(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -619,12 +524,12 @@ func TestRequestCancel(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	specHash := "cancelhash" + strings.Repeat("0", 54)
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.cancel"}', 'READY', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.cancel"}', 'READY', NOW())
 	`, specHash)
 	if err != nil {
 		t.Fatalf("failed to insert task: %v", err)
@@ -662,10 +567,7 @@ func TestRequestCancel(t *testing.T) {
 }
 
 func TestTriageLifecycle(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -675,12 +577,12 @@ func TestTriageLifecycle(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	specHash := "triagehash" + strings.Repeat("1", 54)
 	_, err = pool.Exec(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, max_attempts)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.triage","args":[]}', 'READY', NOW(), 1)
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, max_attempts)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.triage","args":[]}', 'READY', NOW(), 1)
 	`, specHash)
 	if err != nil {
 		t.Fatalf("failed to insert task: %v", err)
@@ -691,7 +593,7 @@ func TestTriageLifecycle(t *testing.T) {
 		t.Fatalf("failed to claim task: %v", err)
 	}
 
-	err = s.CompleteFailure(ctx, task.ResultID, "w-triage-1", json.RawMessage(`{"message":"boom"}`), false, time.Now(), nil)
+	_, err = s.CompleteFailure(ctx, task.ResultID, "w-triage-1", task.LeaseToken, json.RawMessage(`{"message":"boom"}`), false, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("failed to complete failure: %v", err)
 	}
@@ -750,10 +652,7 @@ func TestTriageLifecycle(t *testing.T) {
 }
 
 func TestCompleteSuccessSetsLogsURI(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -763,13 +662,13 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	specHash := "logshash" + strings.Repeat("2", 56)
 	var resultID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.logs"}', 'READY', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.logs"}', 'READY', NOW())
 		RETURNING result_id
 	`, specHash).Scan(&resultID)
 	if err != nil {
@@ -782,7 +681,7 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 	}
 
 	logsPath := "/tmp/reproq-test-logs.log"
-	err = s.CompleteSuccess(ctx, task.ResultID, "w-logs-1", json.RawMessage(`{"res":"ok"}`), &logsPath)
+	err = s.CompleteSuccess(ctx, task.ResultID, "w-logs-1", task.LeaseToken, json.RawMessage(`{"res":"ok"}`), &logsPath)
 	if err != nil {
 		t.Fatalf("completion failed: %v", err)
 	}
@@ -798,10 +697,7 @@ func TestCompleteSuccessSetsLogsURI(t *testing.T) {
 }
 
 func TestReplayBySpecHash(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -811,22 +707,22 @@ func TestReplayBySpecHash(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	specHash := "replayhash" + strings.Repeat("3", 54)
 	var firstID int64
 	var secondID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.replay"}', 'FAILED', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.replay"}', 'FAILED', NOW())
 		RETURNING result_id
 	`, specHash).Scan(&firstID)
 	if err != nil {
 		t.Fatalf("failed to insert first task: %v", err)
 	}
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.replay"}', 'SUCCESSFUL', NOW())
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.replay"}', 'SUCCESSFUL', NOW())
 		RETURNING result_id
 	`, specHash).Scan(&secondID)
 	if err != nil {
@@ -864,10 +760,7 @@ func TestReplayBySpecHash(t *testing.T) {
 }
 
 func TestPruneExpired(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	dsn := testdatabase.URL(t)
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -877,12 +770,12 @@ func TestPruneExpired(t *testing.T) {
 	defer pool.Close()
 
 	pool.Exec(ctx, "DELETE FROM task_runs")
-	s := NewService(pool)
+	s := newTestService(t, pool)
 
 	var expiredReadyID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() - INTERVAL '1 hour')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() - INTERVAL '1 hour')
 		RETURNING result_id
 	`, "expiredready"+strings.Repeat("5", 52)).Scan(&expiredReadyID)
 	if err != nil {
@@ -891,8 +784,8 @@ func TestPruneExpired(t *testing.T) {
 
 	var expiredSuccessID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'SUCCESSFUL', NOW(), NOW() - INTERVAL '2 hours')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.prune"}', 'SUCCESSFUL', NOW(), NOW() - INTERVAL '2 hours')
 		RETURNING result_id
 	`, "expiredsuccess"+strings.Repeat("6", 50)).Scan(&expiredSuccessID)
 	if err != nil {
@@ -901,8 +794,8 @@ func TestPruneExpired(t *testing.T) {
 
 	var futureID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() + INTERVAL '1 hour')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, expires_at)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.prune"}', 'READY', NOW(), NOW() + INTERVAL '1 hour')
 		RETURNING result_id
 	`, "futuretask"+strings.Repeat("7", 54)).Scan(&futureID)
 	if err != nil {
@@ -911,8 +804,8 @@ func TestPruneExpired(t *testing.T) {
 
 	var runningID int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO task_runs (spec_hash, queue_name, spec_json, status, run_after, expires_at, leased_by)
-		VALUES ($1, 'default', '{"task_path":"myapp.tasks.prune"}', 'RUNNING', NOW(), NOW() - INTERVAL '1 hour', 'w1')
+		INSERT INTO task_runs (spec_version,spec_hash, queue_name, spec_json, status, run_after, expires_at, leased_by, leased_until, lease_token)
+		VALUES (1,$1, 'default', '{"task_path":"myapp.tasks.prune"}', 'RUNNING', NOW(), NOW() - INTERVAL '1 hour', 'w1', NOW()+INTERVAL '1 minute',gen_random_uuid())
 		RETURNING result_id
 	`, "runningtask"+strings.Repeat("8", 53)).Scan(&runningID)
 	if err != nil {

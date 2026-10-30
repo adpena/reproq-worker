@@ -8,7 +8,9 @@ As an agent working on `reproq-worker`, you must adhere to the following standar
 - System telemetry (memory usage, goroutine counts) should be exposed for the TUI.
 
 ## 2. Reliability & Safety
-- **Fencing**: Always verify the `worker_id` and `RUNNING` status when updating task states.
+- **Fencing**: Heartbeat and completion must verify worker ownership, the per-claim UUID token, `RUNNING` status and an unexpired database-clock lease. Clear the token on every exit from `RUNNING`; cancellation wins a late success.
+- **Schema authority**: Committed Django migrations own all queue DDL and the periodic enqueue primitive. Do not add Go schema creation, migrations or periodic spec serialization. Validate schema/protocol compatibility before queue work.
+- **Database roles**: Use `REPROQ_DATABASE_URL` for the Go queue. Preserve the executor's business `DATABASE_URL`; never replace it with the queue DSN.
 - **Graceful Shutdown**: Ensure all tasks have time to finish or checkpoint during worker shutdown.
 - **Security**: Validate all task paths against the allowed modules list.
 

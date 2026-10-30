@@ -3,47 +3,36 @@ package executor
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"flag"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"reproq-worker/internal/config"
 )
 
 func TestShellExecutor_PayloadTooLarge(t *testing.T) {
 	e := &ShellExecutor{
 		MaxPayloadBytes: 10,
+		MaxStdoutBytes:  1024,
+		MaxStderrBytes:  1024,
 	}
 	payload := json.RawMessage(`{"too":"large"}`)
-	_, _, _, err := e.Execute(context.Background(), 1, 0, payload, time.Second)
+	_, _, _, err := e.Execute(context.Background(), testClaim(), payload, time.Second)
 	if err == nil || err.Error() != "payload size 15 exceeds limit 10" {
 		t.Errorf("expected payload too large error, got %v", err)
 	}
 }
 
 func TestShellExecutor_InvalidJSON(t *testing.T) {
-	// We use 'echo' as a stub for python
-	e := &ShellExecutor{
-		PythonBin:       "echo",
-		ExecutorModule:  "stub",
-		PayloadMode:     "inline",
-		MaxStdoutBytes:  1024,
-		MaxStderrBytes:  1024,
-		MaxPayloadBytes: 1024,
+	e := helperExecutor(t, "invalid-json")
+	res, _, _, err := e.Execute(context.Background(), testClaim(), json.RawMessage(`"not json"`), time.Second)
+	if !errors.Is(err, ErrProtocol) || res != nil {
+		t.Fatalf("expected a rejected protocol, got result=%+v err=%v", res, err)
 	}
-
-	// echo -m stub --result-id 1 --attempt 0 --payload-json "not json"
-	// will output: -m stub --result-id 1 --attempt 0 --payload-json not json
-	// which is not valid JSON
-	res, stdout, _, err := e.Execute(context.Background(), 1, 0, json.RawMessage(`"not json"`), time.Second)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res.Ok {
-		t.Error("expected Ok=false for invalid JSON stdout")
-	}
-	if !contains(res.Message, "Invalid JSON on stdout") {
-		t.Errorf("expected error message about invalid JSON, got %q", res.Message)
-	}
-	fmt.Printf("Captured stdout: %q\n", stdout)
 }
 
 func TestBoundedBuffer(t *testing.T) {
@@ -52,21 +41,16 @@ func TestBoundedBuffer(t *testing.T) {
 	if b.buf.String() != "hello" {
 		t.Errorf("expected 'hello', got %q", b.buf.String())
 	}
-	if !contains(b.String(), "[TRUNCATED") {
+	if !strings.Contains(b.String(), "[TRUNCATED") {
 		t.Error("expected truncation notice")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || true))
-	// simplified for this context
 }
 
 func TestMockExecutor(t *testing.T) {
 	m := &MockExecutor{Sleep: 10 * time.Millisecond}
 	ctx := context.Background()
 
-	res, _, _, err := m.Execute(ctx, 1, 0, json.RawMessage("{}"), 100*time.Millisecond)
+	res, _, _, err := m.Execute(ctx, testClaim(), json.RawMessage("{}"), 100*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,10 +59,36 @@ func TestMockExecutor(t *testing.T) {
 	}
 
 	// Test Timeout
-	_, _, _, err = m.Execute(ctx, 1, 0, json.RawMessage("{}"), 5*time.Millisecond)
+	_, _, _, err = m.Execute(ctx, testClaim(), json.RawMessage("{}"), 5*time.Millisecond)
 	// Execute doesn't return ResultEnvelope on infra error/timeout usually,
 	// but MockExecutor returns ctx.Err() directly
 	if err == nil {
 		t.Fatal("expected error on timeout")
 	}
+}
+
+func TestSelectedPythonSDKCapabilityInterop(t *testing.T) {
+	python := os.Getenv("REPROQ_TEST_EXECUTOR_PYTHON")
+	if python == "" {
+		t.Skip("Set REPROQ_TEST_EXECUTOR_PYTHON for installed SDK/native runtime qualification")
+	}
+	configuration := config.DefaultConfig()
+	flags := flag.NewFlagSet("owned", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configuration.BindFlags(flags)
+	if err := flags.Parse([]string{"--python-bin", python}); err != nil {
+		t.Fatal(err)
+	}
+	executor := ShellExecutor{
+		PythonBin: configuration.PythonBin, ExecutorModule: configuration.ExecutorModule,
+		MaxPayloadBytes: configuration.MaxPayloadBytes,
+		MaxStdoutBytes:  configuration.MaxStdoutBytes, MaxStderrBytes: configuration.MaxStderrBytes,
+	}
+	if err := executor.CheckCompatibility(context.Background()); err != nil {
+		t.Fatalf("selected SDK interpreter was not executable independently of ambient python3: %v", err)
+	}
+}
+
+func testClaim() Claim {
+	return Claim{ResultID: 1, Attempt: 1, WorkerID: "owned-test-worker", LeaseToken: "41332b05-43ce-49de-8b56-b68950ab401a"}
 }

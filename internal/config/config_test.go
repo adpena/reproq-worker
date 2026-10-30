@@ -3,12 +3,70 @@ package config
 import (
 	"flag"
 	"io"
+	"os"
 	"reflect"
 	"testing"
 )
 
+func TestQueueDSNUsesNamespacedEnvironmentWithoutChangingBusinessDatabase(t *testing.T) {
+	const business = "postgres://business.invalid/business"
+	t.Setenv("DATABASE_URL", business)
+	t.Setenv(QueueDatabaseEnv, "")
+	configuration, err := Load()
+	if err != nil || configuration.DatabaseURL != "" {
+		t.Fatal("worker interpreted the Python business database as its queue")
+	}
+	configuration.DatabaseURL = "postgres://file.invalid/queue"
+	t.Setenv(QueueDatabaseEnv, "postgres://queue.invalid/queue")
+	if err := ApplyEnv(configuration); err != nil || configuration.DatabaseURL != "postgres://queue.invalid/queue" {
+		t.Fatal("namespaced queue environment did not override file configuration")
+	}
+	flags := flag.NewFlagSet("owned", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configuration.BindFlags(flags)
+	if err := flags.Parse([]string{"--dsn", "postgres://flag.invalid/queue"}); err != nil || configuration.DatabaseURL != "postgres://flag.invalid/queue" {
+		t.Fatal("explicit queue flag did not override its environment")
+	}
+	if os.Getenv("DATABASE_URL") != business {
+		t.Fatal("queue configuration replaced the Python business database")
+	}
+}
+
+func TestPythonExecutableFlagPreservesDefaultAndExplicitFilePrecedence(t *testing.T) {
+	for _, configured := range []string{"", "/operator environment/bin/python"} {
+		for _, selected := range []string{"", "/selected environment/bin/python"} {
+			t.Run(configured+"/"+selected, func(t *testing.T) {
+				configuration := DefaultConfig()
+				if err := ApplyFileConfig(configuration, &FileConfig{Worker: WorkerFileConfig{PythonBin: configured}}); err != nil {
+					t.Fatal(err)
+				}
+				flags := flag.NewFlagSet("owned", flag.ContinueOnError)
+				flags.SetOutput(io.Discard)
+				configuration.BindFlags(flags)
+				arguments := []string{}
+				if selected != "" {
+					arguments = []string{"--python-bin", selected}
+				}
+				if err := flags.Parse(arguments); err != nil {
+					t.Fatal(err)
+				}
+				expected := "python3"
+				if configured != "" {
+					expected = configured
+				}
+				if selected != "" {
+					expected = selected
+				}
+				if configuration.PythonBin != expected {
+					t.Fatalf("executor Python = %q, expected %q", configuration.PythonBin, expected)
+				}
+			})
+		}
+	}
+}
+
 func TestLoadAllowsEmptyDatabaseURL(t *testing.T) {
-	t.Setenv("DATABASE_URL", "")
+	t.Setenv(QueueDatabaseEnv, "")
 	t.Setenv("PRIORITY_AGING_FACTOR", "")
 
 	cfg, err := Load()
@@ -21,7 +79,7 @@ func TestLoadAllowsEmptyDatabaseURL(t *testing.T) {
 }
 
 func TestLoadInvalidPriorityAgingFactor(t *testing.T) {
-	t.Setenv("DATABASE_URL", "")
+	t.Setenv(QueueDatabaseEnv, "")
 	t.Setenv("PRIORITY_AGING_FACTOR", "not-a-number")
 
 	_, err := Load()

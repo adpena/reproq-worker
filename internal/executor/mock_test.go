@@ -12,7 +12,7 @@ func TestMockExecution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	env, _, _, err := exec.Execute(ctx, 1, 1, nil, time.Second)
+	env, _, _, err := exec.Execute(ctx, testClaim(), nil, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestMockTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, _, _, err := exec.Execute(ctx, 1, 1, nil, 50*time.Millisecond)
+	_, _, _, err := exec.Execute(ctx, testClaim(), nil, 50*time.Millisecond)
 	if err == nil {
 		t.Error("expected timeout error, got nil")
 	}

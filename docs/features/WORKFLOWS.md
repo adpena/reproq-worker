@@ -24,6 +24,19 @@ Complex business logic often requires tasks to run in a specific order (Chains) 
    - For chords, the worker also updates a `workflow_runs` record and releases the callback only after all group tasks succeed.
    - If any group task fails (terminal failure), the workflow is marked failed and the callback is failed.
 
+Terminal failure, acknowledged cancellation, exhausted lease recovery and pending
+expiry use one dependency finalizer. Blocked chain descendants become `FAILED`;
+nonterminal automatic retries leave them waiting. Cycles terminate through an
+ID set. Every newly terminal chord header contributes once to its summary, even
+after an earlier header failed; the callback is never counted as a header.
+Chains and groups have no invented aggregate result or summary counters.
+
+Normal success locks its direct dependency scope. Terminal propagation locks the
+reachable failure scope, in task ID order before workflow summaries. Pruning
+retains history while related work is active. Manual in-place retry refuses
+terminal workflow members; enqueue a fresh workflow for recovery, or replay an
+explicit detached single task.
+
 ## Usage
 See `reproq-django` documentation for Python API examples.
 

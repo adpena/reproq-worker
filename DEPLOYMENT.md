@@ -6,55 +6,76 @@ This document outlines the strategy for building and releasing the Go worker bin
 To ensure the `reproq-django` install command can find the correct binary, assets in GitHub Releases must follow this pattern:
 `reproq-{os}-{arch}` (optionally with `.exe` for Windows).
 
-Example filenames:
-- `reproq-darwin-arm64`
-- `reproq-darwin-amd64`
-- `reproq-linux-amd64`
-- `reproq-linux-arm64`
-- `reproq-windows-amd64.exe`
+The canonical builder records its supported platforms and exact asset names in
+the output manifest and checksum set.
 
-## 2. Automated Build Script
-Use the existing `scripts/build_releases.sh` to automate cross-compilation:
+## 2. Canonical artifacts
+
+Follow the [README release instructions](README.md#-installation).
+`scripts/build_releases.sh` is the sole build-policy and platform-list authority;
+`go.mod` selects the exact compiler patch and the CLI's `Version` constant selects
+the worker version. Use `make build` only for a local development binary.
+
+## 3. Manual release workflow
+
+The existing `.github/workflows/release.yml` runs only by manual dispatch. It
+requires a separately reviewed existing tag matching the source and creates an
+unpublished draft from canonical artifacts. It refuses an existing release.
+Review local checks, artifacts, checksums, and runtime evidence before a separate
+publication decision. It does not publish automatically when a tag is pushed.
+
+## Runtime container
+
+After building a canonical bundle from the clean committed source:
 
 ```bash
-#!/bin/bash
-VERSION=$(git describe --tags)
-platforms=("darwin/amd64" "darwin/arm64" "linux/amd64" "linux/arm64" "windows/amd64")
-
-for platform in "${platforms[@]}"
-do
-    platform_split=(${platform//\// })
-    GOOS=${platform_split[0]}
-    GOARCH=${platform_split[1]}
-    output_name="reproq-$GOOS-$GOARCH"
-    if [ $GOOS = "windows" ]; then
-        output_name+='.exe'
-    fi
-
-    echo "Building $output_name..."
-    env GO111MODULE=on GOOS=$GOOS GOARCH=$GOARCH go build -tags prod -o "dist/$output_name" ./cmd/reproq
-done
+make container-build ARTIFACTS=dist/candidate IMAGE=reproq-worker:local
+# Optional explicit Docker target; the manifest determines supported platforms:
+make container-build ARTIFACTS=dist/candidate IMAGE=reproq-worker:local PLATFORM=linux/arm64
 ```
 
-## 3. GitHub Actions Integration
-The `.github/workflows/release.yml` should be implemented to:
-1.  Trigger on a new tag (e.g., `v*`).
-2.  Run the build script.
-3.  Create a GitHub Release and upload all files from `dist/` as assets.
+The wrapper verifies the manifest, checksum set, binary build metadata, and exact
+source association before sending an owned minimal context to Docker. Docker's
+`TARGETOS`/`TARGETARCH` choose an artifact listed in that manifest. The runtime-only
+Dockerfile verifies copied bytes again and includes their build manifest. The
+official Alpine runtime is pinned by digest; updating it requires registry and
+CA-bundle verification. These commands load an image locally and never push it.
+
+The image retains a shell and public CA bundle. As with the old
+image, it contains no Django project or Python environment: install the canonical
+worker in your project's own runtime for real Python task execution.
+
+For the existing local mock worker and database:
+
+```bash
+REPROQ_CONTAINER_IMAGE=reproq-worker:local docker compose up -d worker
+```
+
+Compose uses a local image and refuses registry pulls. `make up` still starts only
+the local database. Apply committed ReproQ Django migrations before starting a
+worker; these commands do not run production migrations. The obsolete `loadgen`
+service was removed because its `/app/loadgen` executable never existed.
+Use SDK enqueue APIs to generate canonical workloads and `make bench` for owned
+Go claim benchmarks; the retired synthetic Go producer bypassed that authority.
 
 ## 4. Database Migrations
-If you manage the schema directly from this repo, apply the baseline SQL migration:
+ReproQ Django's committed migrations are the sole schema authority. From the
+configured Django project, migrate the selected queue database:
 
 ```bash
-psql "$DATABASE_URL" -f migrations/000001_baseline.up.sql
+uv run python manage.py migrate reproq_django --database <queue-alias>
 ```
 
-Notes:
-- The baseline uses `CREATE INDEX CONCURRENTLY`, so run it outside a transaction wrapper.
-- The `task_runs_task_path_not_empty` check is created as `NOT VALID` to avoid long table locks.
-  Validate it after backfilling `task_path` with:
-  `ALTER TABLE task_runs VALIDATE CONSTRAINT task_runs_task_path_not_empty;`
-- For existing data, backfill in batches (for example using `result_id` windows) before validating.
+Existing databases created by the retired Go SQL or partial historical Django
+migrations require [guarded schema adoption](https://github.com/adpena/reproq-django#6-run-migrations)
+before ordinary forward migrations. Drain old workers before activating fencing.
+Drain queued legacy `spec_version=0` work with the old runtime before cutover,
+or perform an explicitly audited reconciliation. The new worker refuses a
+selected legacy task without spending an attempt; replay/retry also refuse it.
+This is a deployment gate and can block a queue until an operator resolves it.
+Historical terminal rows remain readable with their original bytes and hashes.
+The worker performs no DDL and refuses a missing or incompatible schema contract,
+including temporary or shadow relations that could retarget queue operations.
 
 ## 5. Production Supervision
 The preferred method for managing Reproq in production is using **systemd**.
@@ -63,7 +84,7 @@ The preferred method for managing Reproq in production is using **systemd**.
 Reproq Django includes a management command that automatically generates optimized service files for your specific project environment:
 
 ```bash
-python manage.py reproq systemd
+uv run python manage.py reproq systemd
 ```
 
 ### Manual Setup
@@ -88,3 +109,12 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
 7. Validate the endpoint from the intended network only:
    - `curl -H "Authorization: Bearer <token>" http://127.0.0.1:9090/healthz`
 8. If you must conserve memory, set `LOW_MEMORY_MODE=1` to disable the metrics/health/events server entirely.
+
+## Unreleased executor interpreter binding
+
+Deploy matching reviewed Go and Django SDK artifacts for the unreleased
+[`--python-bin` contract](README.md#unreleased-executor-python-selection). The
+Django SDK binds the UV-selected interpreter by default while preserving explicit
+file/CLI choices, and verifies `worker_python_bin:1` before startup. Portable
+configuration can omit `worker.python_bin`; no machine path is written by init.
+Keep one outer `uv run` environment for Django, web and Python task executors.

@@ -2,61 +2,110 @@ package queue
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"os"
 	"reproq-worker/internal/db"
+	"reproq-worker/internal/testdatabase"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func BenchmarkClaim(b *testing.B) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		b.Skip("DATABASE_URL not set")
-	}
-
+	b.StopTimer()
+	dsn := testdatabase.URL(b)
 	ctx := context.Background()
 	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer pool.Close()
-
-	service := NewService(pool)
-
-	// Prepare data
-	b.StopTimer()
-	setupTasks(b, pool, b.N)
+	b.Cleanup(pool.Close)
+	queueName, _ := seedBenchmarkTasks(b, pool, b.N)
+	service := newTestService(b, pool)
+	b.ReportAllocs()
+	b.ResetTimer()
 	b.StartTimer()
-
-	leaseSeconds := int((5 * time.Minute) / time.Second)
 	for i := 0; i < b.N; i++ {
-		_, err := service.Claim(ctx, "bench-worker", "default", leaseSeconds, 0)
+		task, err := service.Claim(ctx, "bench-worker", queueName, 300, 0)
 		if err != nil {
-			// If we run out of tasks, it's fine for the bench to show limits
-			if err == ErrNoTasks {
-				break
-			}
-			b.Fatal(err)
+			b.Fatalf("claim %d of %d failed: %v", i+1, b.N, err)
+		}
+		if task == nil || task.QueueName != queueName || task.Status != StatusRunning {
+			b.Fatalf("claim %d did not return the owned RUNNING task", i+1)
 		}
 	}
+	b.StopTimer()
+	var claimed int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM task_runs WHERE queue_name=$1 AND spec_json->>'benchmark_owner'=$1 AND status='RUNNING'", queueName).Scan(&claimed); err != nil {
+		b.Fatal(err)
+	}
+	if claimed != b.N {
+		b.Fatalf("database has %d owned RUNNING tasks, want %d completed claims", claimed, b.N)
+	}
+	b.ReportMetric(float64(b.N), "claims")
 }
 
-func setupTasks(b *testing.B, pool *pgxpool.Pool, n int) {
-	ctx := context.Background()
-	// Clear table
-	_, _ = pool.Exec(ctx, "DELETE FROM task_runs")
-
-	for i := 0; i < n; i++ {
-		query := `
-			INSERT INTO task_runs (spec_hash, queue_name, payload_json, status, run_after)
-			VALUES ($1, 'default', '{}', 'PENDING', NOW())
-		`
-		_, err := pool.Exec(ctx, query, fmt.Sprintf("hash-%d", i))
+func seedBenchmarkTasks(tb testing.TB, pool *pgxpool.Pool, n int) (string, func()) {
+	tb.Helper()
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		tb.Fatal(err)
+	}
+	owner := "reproq_test_bench_" + hex.EncodeToString(nonce)
+	cleanup := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, err := pool.Exec(ctx, "DELETE FROM task_runs WHERE queue_name=$1 AND spec_json->>'benchmark_owner'=$1", owner)
 		if err != nil {
-			b.Fatal(err)
+			tb.Errorf("failed cleaning owned benchmark tasks: %v", err)
 		}
+	}
+	tb.Cleanup(cleanup)
+	source := pgx.CopyFromSlice(n, func(i int) ([]any, error) {
+		spec, err := json.Marshal(map[string]any{
+			"v": 1, "task_path": "contracts.benchmark_task", "args": []int{i},
+			"kwargs": map[string]any{}, "benchmark_owner": owner,
+		})
+		if err != nil {
+			return nil, err
+		}
+		hash := sha256.Sum256(spec)
+		return []any{fmt.Sprintf("%x", hash), owner, string(spec), "READY", "contracts.benchmark_task", 1}, nil
+	})
+	count, err := pool.CopyFrom(context.Background(), pgx.Identifier{"task_runs"},
+		[]string{"spec_hash", "queue_name", "spec_json", "status", "task_path", "spec_version"}, source)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if count != int64(n) {
+		tb.Fatalf("seeded %d tasks, want %d", count, n)
+	}
+	return owner, cleanup
+}
+
+func TestBenchmarkFixtureCleanupPreservesOtherQueues(t *testing.T) {
+	dsn := testdatabase.URL(t)
+	pool, err := db.NewPool(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	otherQueue, _ := seedBenchmarkTasks(t, pool, 1)
+	ownedQueue, cleanup := seedBenchmarkTasks(t, pool, 3)
+	cleanup()
+	var owned, other int
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM task_runs WHERE queue_name=$1", ownedQueue).Scan(&owned); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM task_runs WHERE queue_name=$1", otherQueue).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	if owned != 0 || other != 1 {
+		t.Fatalf("cleanup left owned=%d and other=%d, want 0 and 1", owned, other)
 	}
 }

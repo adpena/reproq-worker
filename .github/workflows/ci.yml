@@ -1,29 +1,12 @@
 name: Go CI
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: pass
-          POSTGRES_DB: reproq
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    # Database integration uses make test-integration locally with a Django-prepared DB.
     steps:
     - uses: actions/checkout@v4
 
@@ -35,15 +18,10 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
-    - name: Run Migrations
+    - name: Install configured linter
       run: |
-        for f in $(ls -1v migrations/*.up.sql); do
-          psql "postgres://user:pass@localhost:5432/reproq?sslmode=disable" -f "$f"
-        done
-      env:
-        PGPASSWORD: pass
+        make lint-install
+        echo "$PWD/.local/bin" >> "$GITHUB_PATH"
 
-    - name: Run Tests
-      run: go test -v ./...
-      env:
-        DATABASE_URL: "postgres://user:pass@localhost:5432/reproq?sslmode=disable"
+    - name: Unit tests, vet and lint
+      run: make check

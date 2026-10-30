@@ -28,7 +28,7 @@ func (f *fakeQueue) RegisterWorker(ctx context.Context, id, hostname string, con
 	return nil
 }
 
-func (f *fakeQueue) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+func (f *fakeQueue) Reclaim(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
@@ -40,21 +40,24 @@ func (f *fakeQueue) Claim(ctx context.Context, workerID string, queueName string
 	return nil, queue.ErrNoTasks
 }
 
-func (f *fakeQueue) Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error) {
+func (f *fakeQueue) Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
+func (f *fakeQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (f *fakeQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
-	return nil
+func (f *fakeQueue) CompleteFailure(ctx context.Context, resultID int64, workerID, leaseToken string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) (queue.TaskStatus, error) {
+	if retry {
+		return queue.StatusReady, nil
+	}
+	return queue.StatusFailed, nil
 }
 
 type fakeExecutor struct{}
 
-func (f *fakeExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
+func (f *fakeExecutor) Execute(ctx context.Context, claim executor.Claim, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	return nil, "", "", nil
 }
 
@@ -68,7 +71,7 @@ func (v *validationQueue) RegisterWorker(ctx context.Context, id, hostname strin
 	return nil
 }
 
-func (v *validationQueue) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+func (v *validationQueue) Reclaim(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
@@ -80,26 +83,29 @@ func (v *validationQueue) Claim(ctx context.Context, workerID string, queueName 
 	return nil, queue.ErrNoTasks
 }
 
-func (v *validationQueue) Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error) {
+func (v *validationQueue) Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error) {
 	return false, nil
 }
 
-func (v *validationQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
+func (v *validationQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (v *validationQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
+func (v *validationQueue) CompleteFailure(ctx context.Context, resultID int64, workerID, leaseToken string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) (queue.TaskStatus, error) {
 	v.failureCalled = true
 	v.failureJSON = errorsJSON
 	v.retry = retry
-	return nil
+	if retry {
+		return queue.StatusReady, nil
+	}
+	return queue.StatusFailed, nil
 }
 
 type recordingExecutor struct {
 	called bool
 }
 
-func (r *recordingExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
+func (r *recordingExecutor) Execute(ctx context.Context, claim executor.Claim, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	r.called = true
 	return nil, "", "", nil
 }
@@ -122,7 +128,7 @@ func (c *cancelQueue) RegisterWorker(ctx context.Context, id, hostname string, c
 	return nil
 }
 
-func (c *cancelQueue) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+func (c *cancelQueue) Reclaim(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
@@ -134,24 +140,24 @@ func (c *cancelQueue) Claim(ctx context.Context, workerID string, queueName stri
 	return nil, queue.ErrNoTasks
 }
 
-func (c *cancelQueue) Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error) {
+func (c *cancelQueue) Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error) {
 	return true, nil
 }
 
-func (c *cancelQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
+func (c *cancelQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (c *cancelQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
+func (c *cancelQueue) CompleteFailure(ctx context.Context, resultID int64, workerID, leaseToken string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) (queue.TaskStatus, error) {
 	c.failureCalled = true
 	c.failureJSON = errorsJSON
 	c.retry = retry
-	return nil
+	return queue.StatusCancelled, nil
 }
 
 type blockingExecutor struct{}
 
-func (b *blockingExecutor) Execute(ctx context.Context, resultID int64, attempt int, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
+func (b *blockingExecutor) Execute(ctx context.Context, claim executor.Claim, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	<-ctx.Done()
 	return nil, "", "", ctx.Err()
 }
@@ -165,7 +171,7 @@ func (r *roundRobinQueue) RegisterWorker(ctx context.Context, id, hostname strin
 	return nil
 }
 
-func (r *roundRobinQueue) Reclaim(ctx context.Context, maxAttemptsDefault int) (int64, error) {
+func (r *roundRobinQueue) Reclaim(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
@@ -183,21 +189,24 @@ func (r *roundRobinQueue) Claim(ctx context.Context, workerID string, queueName 
 	return task, nil
 }
 
-func (r *roundRobinQueue) Heartbeat(ctx context.Context, resultID int64, workerID string, leaseSeconds int) (bool, error) {
+func (r *roundRobinQueue) Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error) {
 	return false, nil
 }
 
-func (r *roundRobinQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID string, returnJSON json.RawMessage, logsURI *string) error {
+func (r *roundRobinQueue) CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error {
 	return nil
 }
 
-func (r *roundRobinQueue) CompleteFailure(ctx context.Context, resultID int64, workerID string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) error {
-	return nil
+func (r *roundRobinQueue) CompleteFailure(ctx context.Context, resultID int64, workerID, leaseToken string, errorsJSON json.RawMessage, retry bool, nextRun time.Time, logsURI *string) (queue.TaskStatus, error) {
+	if retry {
+		return queue.StatusReady, nil
+	}
+	return queue.StatusFailed, nil
 }
 
 func TestRunnerRegistersVersion(t *testing.T) {
 	cfg := &config.Config{
-		WorkerID:               "worker-1",
+		WorkerID: "worker-1", MaxPayloadBytes: 1024 * 1024,
 		Version:                "test-version",
 		QueueNames:             []string{"default"},
 		MaxConcurrency:         0,
@@ -206,7 +215,6 @@ func TestRunnerRegistersVersion(t *testing.T) {
 		LeaseSeconds:           60,
 		HeartbeatSeconds:       0,
 		ReclaimIntervalSeconds: 0,
-		MaxAttemptsDefault:     3,
 		ExecTimeout:            time.Second,
 		PriorityAgingFactor:    0,
 	}
@@ -234,7 +242,7 @@ func TestPublishEventAddsRoleMetadata(t *testing.T) {
 	publisher := &recordingPublisher{}
 	r := &Runner{
 		cfg: &config.Config{
-			WorkerID:    "worker-1",
+			WorkerID: "worker-1", MaxPayloadBytes: 1024 * 1024,
 			ProcessRole: "worker",
 		},
 		publisher: publisher,
@@ -251,7 +259,7 @@ func TestPublishEventAddsRoleMetadata(t *testing.T) {
 
 func TestPollRoundRobin(t *testing.T) {
 	cfg := &config.Config{
-		WorkerID:            "worker-1",
+		WorkerID: "worker-1", MaxPayloadBytes: 1024 * 1024,
 		QueueNames:          []string{"q1", "q2", "q3"},
 		LeaseSeconds:        60,
 		PriorityAgingFactor: 0,
@@ -295,7 +303,7 @@ func TestPollRoundRobin(t *testing.T) {
 
 func TestRunnerRejectsUnauthorizedTask(t *testing.T) {
 	cfg := &config.Config{
-		WorkerID:            "worker-1",
+		WorkerID: "worker-1", MaxPayloadBytes: 1024 * 1024,
 		QueueNames:          []string{"default"},
 		AllowedTaskModules:  []string{"allowed."},
 		MaxConcurrency:      1,
@@ -319,6 +327,7 @@ func TestRunnerRejectsUnauthorizedTask(t *testing.T) {
 		SpecJSON:  json.RawMessage(`{"task_path":"forbidden.task"}`),
 		SpecHash:  "hash",
 	}
+	sealRunnerFixture(t, task)
 	r.runTask(context.Background(), task)
 
 	if !q.failureCalled {
@@ -382,7 +391,7 @@ func TestSleepHandlesZeroBackoffRange(t *testing.T) {
 
 func TestRunnerHandlesCancellation(t *testing.T) {
 	cfg := &config.Config{
-		WorkerID:            "worker-1",
+		WorkerID: "worker-1", MaxPayloadBytes: 1024 * 1024,
 		QueueNames:          []string{"default"},
 		AllowedTaskModules:  []string{"allowed."},
 		MaxConcurrency:      1,
@@ -408,6 +417,7 @@ func TestRunnerHandlesCancellation(t *testing.T) {
 		Attempts:    1,
 		MaxAttempts: 1,
 	}
+	sealRunnerFixture(t, task)
 	r.runTask(context.Background(), task)
 
 	if !q.failureCalled {
@@ -425,3 +435,9 @@ func TestRunnerHandlesCancellation(t *testing.T) {
 		t.Fatalf("expected kind cancelled, got %v", payload["kind"])
 	}
 }
+
+func (e *fakeExecutor) CheckCompatibility(context.Context) error { return nil }
+
+func (e *recordingExecutor) CheckCompatibility(context.Context) error { return nil }
+
+func (e *blockingExecutor) CheckCompatibility(context.Context) error { return nil }

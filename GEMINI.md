@@ -4,7 +4,7 @@
 `reproq-worker` is a production-grade, deterministic background task execution service written in Go. It is designed to act as a scalable backend for Django 6.0's Tasks API, replacing traditional brokers like Celery or RQ with a Postgres-backed queue.
 
 ### Core Technologies
-- **Language**: Go 1.22+
+- **Language**: Exact patched Go version selected in `go.mod` for canonical checks/builds.
 - **Database**: PostgreSQL 15+ (Required for `SKIP LOCKED` support)
 - **Database Driver**: `jackc/pgx/v5`
 - **Executor**: External Python processes (invoked via `python -m`)
@@ -24,7 +24,8 @@ The project follows a modular Go structure:
 ## Building and Running
 
 ### Key Commands
-- **Build**: `go build -o reproq ./cmd/reproq`
+- **Local development build**: `make build` (not release qualified).
+- **Production artifacts and containers**: Follow [DEPLOYMENT.md](DEPLOYMENT.md); the canonical release builder owns compilation policy.
 - **Run Worker**: `./reproq worker --dsn "postgres://..."`
 - **Start Scheduler**: `./reproq beat`
 - **Replay Task**: `./reproq replay --dsn "postgres://..." --id 123` or `--spec-hash <hash>`
@@ -32,14 +33,10 @@ The project follows a modular Go structure:
 - **Prune Expired**: `./reproq prune expired --dsn "postgres://..."`
 - **Version**: `./reproq --version`
 
-### Torture Tool (Separate Binary)
-- **Run**: `go run ./cmd/torture --dsn "postgres://..." --count 1000`
-- **Build**: `go build -o reproq-torture ./cmd/torture`
-
 ### Development & Testing
 Automated via `Makefile`:
 - `make test`: Runs unit tests for executor and validator.
-- `make test-integration`: Spins up a Dockerized Postgres, applies migrations, and runs full lifecycle integration tests.
+- `make test-integration`: Tests an explicitly prepared loopback `reproq_test_*` database selected through `REPROQ_TEST_DATABASE_URL`; does not create infrastructure or apply migrations.
 - `make up`: Starts the Postgres container for local development.
 
 ## Development Conventions
@@ -57,27 +54,28 @@ Automated via `Makefile`:
 ### Deployment & Release Requirements
 To support the automated installation via `reproq-django`, releases must include pre-built binaries following this naming convention:
 - `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)
-- Keep only three tags/releases at any time; delete older tags/releases and their artifacts.
+- Preserve published tags, releases, and assets for reproducibility. Retire obsolete current code and active artifacts instead. Never move a published tag or replace published assets.
 
-### Build Command for AI Agents
-When major changes are made to the Go worker logic (internal/queue, internal/runner), agents should remind the user to rebuild or run:
-```bash
-go build -o reproq ./cmd/reproq
-```
+### Build and release authority
+
+Run `make build` for local development and follow [DEPLOYMENT.md](DEPLOYMENT.md)
+for reviewed production artifacts. Do not introduce an alternate compiler,
+platform matrix, or production build command in documentation or Dockerfiles.
 
 ### Current Behavioral Notes
 - Queue polling is round-robin across configured queues (`--queues` / `QUEUE_NAMES`).
 - Worker registration uses the CLI `Version` constant.
-- Config reads `DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
+- Config reads `REPROQ_DATABASE_URL`, `WORKER_ID`, `QUEUE_NAMES`, `ALLOWED_TASK_MODULES`, `REPROQ_LOGS_DIR`, and `PRIORITY_AGING_FACTOR`; metrics settings come from `METRICS_ADDR`/`METRICS_AUTH_*` or flags.
 - Claiming respects `reproq_queue_controls` (paused queues) and `concurrency_key`/`concurrency_limit`.
-- Periodic payloads may be stored as `{"args": [...], "kwargs": {...}}` for recurring schedules.
+- Periodic definitions retain SDK canonical text/hash/version; Go and optional pg_cron call the same migration-owned occurrence function. Go selects only provider=go and preserves explicit cron zones. Historical unassigned definitions require explicit provider activation.
 
 ## Reliability Invariants
-- **Fencing**: Every terminal state update (`SUCCESSFUL`, `FAILED`) must verify the `worker_id` and `RUNNING` status to prevent zombie commits.
+- **Fencing**: Heartbeats and terminal updates require owner, per-claim UUID token, RUNNING status and an unexpired database-clock lease. Every RUNNING exit clears the token; cancellation can win a late success.
 - **Heartbeat-Execution Link**: If a heartbeat fails to renew a lease, the task execution context must be cancelled immediately.
-- **Lease Reaper**: A background process must periodically return expired `RUNNING` tasks to `READY`.
-- **Concurrency Guard**: Dedupes via `spec_hash` checks before enqueue; a partial unique index can reinforce this in Postgres.
-- **Concurrency Limits**: Enforced at claim time via `concurrency_key` + `concurrency_limit`.
+- **Lease Reaper**: Automatic and CLI reclaim share one Go helper. Stored attempt budget and cancellation determine READY, FAILED or CANCELLED; workflow finalization shares the completion helper.
+- **Occurrence Guard**: Periodic identity is definition plus nominal UTC instant across all statuses. Canonical task hash does not coalesce separate occurrences.
+- **Concurrency Limits**: Every nonempty concurrency key locks and counts, including zero-limit members. A fresh READ COMMITTED check uses the smallest positive candidate/active-member cap; no positive cap means unbounded.
+- **Schema Authority**: Committed Django migrations are the sole DDL owner. Require exact schema v2 and public relation/function binding before queue use; never repair a schema at runtime.
 
 ### Security Posture
 - **Validation**: All task module paths must be validated against an allow-list in `internal/executor/validator.go`.
