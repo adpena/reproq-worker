@@ -32,6 +32,39 @@ func TestQueueDSNUsesNamespacedEnvironmentWithoutChangingBusinessDatabase(t *tes
 	}
 }
 
+func TestPythonExecutableFlagPreservesDefaultAndExplicitFilePrecedence(t *testing.T) {
+	for _, configured := range []string{"", "/operator environment/bin/python"} {
+		for _, selected := range []string{"", "/selected environment/bin/python"} {
+			t.Run(configured+"/"+selected, func(t *testing.T) {
+				configuration := DefaultConfig()
+				if err := ApplyFileConfig(configuration, &FileConfig{Worker: WorkerFileConfig{PythonBin: configured}}); err != nil {
+					t.Fatal(err)
+				}
+				flags := flag.NewFlagSet("owned", flag.ContinueOnError)
+				flags.SetOutput(io.Discard)
+				configuration.BindFlags(flags)
+				arguments := []string{}
+				if selected != "" {
+					arguments = []string{"--python-bin", selected}
+				}
+				if err := flags.Parse(arguments); err != nil {
+					t.Fatal(err)
+				}
+				expected := "python3"
+				if configured != "" {
+					expected = configured
+				}
+				if selected != "" {
+					expected = selected
+				}
+				if configuration.PythonBin != expected {
+					t.Fatalf("executor Python = %q, expected %q", configuration.PythonBin, expected)
+				}
+			})
+		}
+	}
+}
+
 func TestLoadAllowsEmptyDatabaseURL(t *testing.T) {
 	t.Setenv(QueueDatabaseEnv, "")
 	t.Setenv("PRIORITY_AGING_FACTOR", "")

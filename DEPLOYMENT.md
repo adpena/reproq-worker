@@ -84,7 +84,7 @@ The preferred method for managing Reproq in production is using **systemd**.
 Reproq Django includes a management command that automatically generates optimized service files for your specific project environment:
 
 ```bash
-python manage.py reproq systemd
+uv run python manage.py reproq systemd
 ```
 
 ### Manual Setup
@@ -109,3 +109,12 @@ Use this checklist when exposing `/metrics`, `/healthz`, or `/events` in product
 7. Validate the endpoint from the intended network only:
    - `curl -H "Authorization: Bearer <token>" http://127.0.0.1:9090/healthz`
 8. If you must conserve memory, set `LOW_MEMORY_MODE=1` to disable the metrics/health/events server entirely.
+
+## Unreleased executor interpreter binding
+
+Deploy matching reviewed Go and Django SDK artifacts for the unreleased
+[`--python-bin` contract](README.md#unreleased-executor-python-selection). The
+Django SDK binds the UV-selected interpreter by default while preserving explicit
+file/CLI choices, and verifies `worker_python_bin:1` before startup. Portable
+configuration can omit `worker.python_bin`; no machine path is written by init.
+Keep one outer `uv run` environment for Django, web and Python task executors.

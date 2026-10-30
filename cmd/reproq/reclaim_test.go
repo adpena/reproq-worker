@@ -51,6 +51,9 @@ func TestWorkerCapabilityCommandUsesRuntimeProtocolContract(t *testing.T) {
 	if capability.Operations["history_prune"] != 1 {
 		t.Fatal("worker did not advertise canonical history pruning")
 	}
+	if capability.Operations["worker_python_bin"] != 1 {
+		t.Fatal("worker did not advertise explicit executor Python selection")
+	}
 }
 
 func cliChild(t *testing.T, commandName, dsn string, arguments ...string) ([]byte, error) {

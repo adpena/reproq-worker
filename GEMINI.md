@@ -54,7 +54,7 @@ Automated via `Makefile`:
 ### Deployment & Release Requirements
 To support the automated installation via `reproq-django`, releases must include pre-built binaries following this naming convention:
 - `reproq-{os}-{arch}` (e.g., `reproq-darwin-arm64`, `reproq-linux-amd64`, `reproq-windows-amd64.exe`)
-- Keep only three tags/releases at any time; delete older tags/releases and their artifacts.
+- Preserve published tags, releases, and assets for reproducibility. Retire obsolete current code and active artifacts instead. Never move a published tag or replace published assets.
 
 ### Build and release authority
 

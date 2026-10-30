@@ -69,10 +69,11 @@
             <section id="installation" class="mb-16 prose prose-slate max-w-none">
                 <h2 class="text-3xl font-bold mb-6">Installation</h2>
                 <p>Reproq provides pre-built binaries for Linux, macOS, and Windows. You can download them manually or use the Django helper.</p>
+                <p><strong>Unreleased:</strong> The selected-interpreter <code>--python-bin</code> contract requires matching Go and SDK artifacts and <code>worker_python_bin:1</code>. See the <a href="https://github.com/adpena/reproq-worker/blob/main/README.md#unreleased-executor-python-selection">canonical configuration reference</a>.</p>
                 <h4 class="font-bold mt-4">Quickstart (Django)</h4>
-                <pre>python manage.py reproq install
-python manage.py reproq migrate-worker
-python manage.py reproq worker</pre>
+                <pre>uv run python manage.py reproq install
+uv run python manage.py reproq migrate-worker
+uv run python manage.py reproq worker</pre>
                 
                 <h4 class="font-bold mt-4">Local Development Build (Go)</h4>
                 <pre>make build</pre>
@@ -195,7 +196,7 @@ python manage.py reproq worker</pre>
             <section id="deployment" class="mb-16 prose prose-slate max-w-none">
                 <h2 class="text-3xl font-bold mb-6">Deployment</h2>
                 <p>For production deployment, it is recommended to use <code>systemd</code> to manage the worker and beat processes. Reproq provides an automated command to generate these service files for you:</p>
-                <pre>python manage.py reproq systemd</pre>
+                <pre>uv run python manage.py reproq systemd</pre>
                 <p class="mt-4">See the <a href="https://github.com/adpena/reproq-worker/blob/main/DEPLOYMENT.md" class="text-emerald-600 font-bold">Deployment Guide</a> for manual templates and best practices.</p>
                 <p class="mt-4"><strong>Note:</strong> Reproq Worker is designed to work in tandem with <a href="https://adpena.github.io/reproq-django/" class="text-emerald-600 font-bold">Reproq Django</a>, which provides the task definition and monitoring interface.</p>
             </section>

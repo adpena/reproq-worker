@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"reproq-worker/internal/config"
 )
 
 func TestShellExecutor_PayloadTooLarge(t *testing.T) {
@@ -59,6 +64,28 @@ func TestMockExecutor(t *testing.T) {
 	// but MockExecutor returns ctx.Err() directly
 	if err == nil {
 		t.Fatal("expected error on timeout")
+	}
+}
+
+func TestSelectedPythonSDKCapabilityInterop(t *testing.T) {
+	python := os.Getenv("REPROQ_TEST_EXECUTOR_PYTHON")
+	if python == "" {
+		t.Skip("Set REPROQ_TEST_EXECUTOR_PYTHON for installed SDK/native runtime qualification")
+	}
+	configuration := config.DefaultConfig()
+	flags := flag.NewFlagSet("owned", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configuration.BindFlags(flags)
+	if err := flags.Parse([]string{"--python-bin", python}); err != nil {
+		t.Fatal(err)
+	}
+	executor := ShellExecutor{
+		PythonBin: configuration.PythonBin, ExecutorModule: configuration.ExecutorModule,
+		MaxPayloadBytes: configuration.MaxPayloadBytes,
+		MaxStdoutBytes:  configuration.MaxStdoutBytes, MaxStderrBytes: configuration.MaxStderrBytes,
+	}
+	if err := executor.CheckCompatibility(context.Background()); err != nil {
+		t.Fatalf("selected SDK interpreter was not executable independently of ambient python3: %v", err)
 	}
 }
 

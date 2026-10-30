@@ -82,6 +82,8 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 
 	fs.StringVar(&c.PayloadMode, "payload-mode", c.PayloadMode, "Payload mode: stdin|file|inline")
 
+	fs.StringVar(&c.PythonBin, "python-bin", c.PythonBin, "Python executable for executor capability checks and task processes")
+
 	fs.Float64Var(&c.PriorityAgingFactor, "priority-aging-factor", c.PriorityAgingFactor, "Seconds of waiting per priority point (0 to disable)")
 
 	fs.StringVar(&c.LogsDir, "logs-dir", c.LogsDir, "Directory to persist stdout/stderr logs (empty disables)")

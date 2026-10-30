@@ -30,7 +30,7 @@ uv run python manage.py reproq worker
 | Schema / executor protocol | `reproq-schema-v2` / protocol `2` |
 | Reproq Django | The SDK release declaring that exact schema and executor protocol |
 
-Keep the worker and reproq-django releases aligned; use `python manage.py reproq doctor` to verify the binary, schema, and DSN. `reproq capabilities` reports the worker's JSON compatibility contract without opening a database. Before registering or claiming tasks, a Python worker probes the configured executor's `--capabilities` response and refuses an incompatible environment.
+Keep the worker and reproq-django releases aligned; use `uv run python manage.py reproq doctor` to verify the binary, schema, and DSN. `reproq capabilities` reports the worker's JSON compatibility contract without opening a database. Before registering or claiming tasks, a Python worker probes the configured executor's `--capabilities` response and refuses an incompatible environment.
 
 Set `REPROQ_DATABASE_URL` for the Go queue connection. The Python application's
 business `DATABASE_URL` remains unchanged when tasks run, so a separate queue
@@ -55,7 +55,7 @@ If you need complex routing, multi-broker support, or a large existing Celery ec
 
 The recommended way to install the worker is via the Django management command, which handles versioning and platform detection:
 ```bash
-python manage.py reproq install
+uv run python manage.py reproq install
 ```
 
 For a local development binary, use the source toolchain selected in `go.mod`:
@@ -263,7 +263,7 @@ Set `REPROQ_PROCESS_ROLE` to label events in the `/events` stream (useful when m
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
 Set `ALLOWED_TASK_MODULES=*` to disable task module validation in local development.
 When `--logs-dir` is set, the worker writes stdout/stderr to a file per attempt and stores the path in `logs_uri`.
-The log file is plaintext with `STDOUT:`/`STDERR:` headers; `python manage.py reproq logs --id <result_id>` can read it.
+The log file is plaintext with `STDOUT:`/`STDERR:` headers; `uv run python manage.py reproq logs --id <result_id>` can read it.
 Structured logs redact payload and secret-like fields by key name.
 `--payload-mode inline` exposes payload data in process args; prefer `stdin` or `file` for sensitive payloads. Production builds (`-tags prod`) reject `inline`.
 Config files can also set fields that do not have CLI flags, including poll backoff, executor module, payload limits, and timeouts.
@@ -279,6 +279,18 @@ default execution timeout. Both infrastructure and task failures consume the
 stored attempt budget. Cancellation terminates the owned subprocess group (a
 Job Object on Windows), and pipe draining and worker shutdown are bounded.
 
+### Unreleased executor Python selection
+
+The Go 0.0.145 candidate exposes the existing `worker.python_bin` configuration
+as `--python-bin` and advertises `worker_python_bin:1` in its versioned operations.
+The standalone default remains `python3`. An explicit CLI value overrides a file
+value. The matching Django SDK defaults to the interpreter selected by `uv run`,
+honors explicit file/CLI choices, and omits this optional value from portable
+generated templates. `uv run python manage.py reproq config --explain`, `check`,
+and `doctor` expose the selected runtime and verify compatibility. Publish and
+install matching reviewed Go and SDK artifacts before deploying this unreleased
+behavior; schema2 and executor protocol2 are unchanged.
+
 ### Worker Tuning
 | Flag | Default | Description |
 | :--- | :--- | :--- |
@@ -287,6 +299,7 @@ Job Object on Windows), and pipe draining and worker shutdown are bounded.
 | `--heartbeat-seconds` | `60` | Frequency at which the worker updates the lease for running tasks. |
 | `--reclaim-interval-seconds` | `60` | Frequency at which the worker checks for and resets expired leases (zombie tasks). Set to `0` to disable. |
 | `--payload-mode` | `stdin` | How the payload is passed to the Python process (`stdin`, `file`, `inline`). |
+| `--python-bin` | `python3` | Executor executable for capability checks and tasks. Overrides `worker.python_bin`; the Django SDK supplies its selected interpreter by default. |
 | `--priority-aging-factor` | `60` | Seconds of waiting per priority point (0 disables aging). |
 
 `PRIORITY_AGING_FACTOR` can also set the default for `--priority-aging-factor`.
