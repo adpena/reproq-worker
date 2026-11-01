@@ -143,9 +143,9 @@ Cancel pending work immediately, or request cooperative cancellation of a runnin
 ```
 `READY` / `WAITING` tasks become `CANCELLED` atomically, including explicit
 retirement of legacy pending work without relabeling its payload/version.
-Running cancellation is cooperative and observed on worker heartbeat. A request
-wins a concurrent success acknowledgment; the lease token is cleared when the
-run leaves `RUNNING`. Pending cancellation, failure and reclaim share workflow
+Running cancellation is cooperative and observed on worker heartbeat. Once
+cancellation is recorded, a later success acknowledgment is rejected. The lease
+token is cleared when the run leaves `RUNNING`. Pending cancellation, failure and reclaim share workflow
 finalization. Repeated or terminal cancellation leaves history unchanged.
 
 ### `reclaim`
