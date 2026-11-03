@@ -1,5 +1,14 @@
 # Reproq Worker Agent Guidelines
 
+## Main Authority and Task Closeout
+
+- `origin/main` is the sole integration authority. Inspect live remote main, existing branches/worktrees, dirty changes and ownership before work. Prefer one checkout with disjoint agent file ownership. Temporary isolation requires an explicit owner/base/purpose; do not create recovery checkouts or chains of dependent review branches.
+- Promptly land coherent changes after independent adversarial review and applicable checks. Merge or fast-forward to `main`, push and verify the live remote commit. Release publication and consumer deployment remain separate gates.
+- Before ending a normal task turn, leave one checkout on `main`, local `HEAD` and `main` equal to live `origin/main`, a clean working tree and no remaining task branches locally or remotely. Close completed PRs and remove superseded branches/worktrees during the task.
+- Reconcile unique commits and dirty/untracked work before removal. Preserve required source data, provenance, qualification receipts and deliverables in canonical locations and verify custody. Never discard unfinished/other-owned work or published tags/releases/assets to force a clean result.
+- Run TEA Data's canonical read-only `scripts/check_workspace_closeout.py` across task repositories and workspace clones. Standalone clones without that tool must perform equivalent Git inventory, cleanliness, branch and live-remote checks. Audit failures remain unresolved work; the auditor does not merge/delete or certify tests. Report exact retained state and authorization/authentication/ownership blockers when safe closure cannot proceed.
+- Keep this policy synchronized across the four TEA Data/ReproQ repositories, without competing cleanup scripts or destructive automatic hooks.
+
 As an agent working on `reproq-worker`, you must adhere to the following standards:
 
 ## 1. Observability First
