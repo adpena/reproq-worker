@@ -113,7 +113,7 @@ uv run python manage.py reproq worker</pre>
 ./reproq triage retry --all</pre>
 
                 <h3 class="text-xl font-bold mt-8">prune</h3>
-                <p>Delete expired tasks (expires_at in the past, excluding RUNNING).</p>
+                <p>Finalize expired pending tasks and delete eligible expired runs. A dry run counts candidates without modifying them; finalization can retain a run for its workflow.</p>
                 <pre>./reproq prune expired --dry-run
 ./reproq prune expired --limit 1000</pre>
 

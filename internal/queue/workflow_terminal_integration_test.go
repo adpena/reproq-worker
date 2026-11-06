@@ -313,6 +313,10 @@ func TestRetainedExpiredCallbackDoesNotStarveUnrelatedExpiry(t *testing.T) {
 	claim := f.claim(t, header)
 	callback := f.node(t, "WAITING", nil, &workflow, true)
 	f.summary(t, workflow, 1, callback)
+	preview, err := f.service.PruneExpired(f.ctx, 1, true)
+	if err != nil || preview != 1 || f.status(t, callback) != "WAITING" {
+		t.Fatalf("dry run must count the candidate without changing it: %d %v", preview, err)
+	}
 	other := f.node(t, "READY", nil, nil, true)
 	count, err := f.service.PruneExpired(f.ctx, 1, false)
 	if err != nil || count != 1 {

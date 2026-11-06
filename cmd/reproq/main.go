@@ -608,8 +608,8 @@ func runPrune(args []string) {
 	case "expired":
 		fs := flag.NewFlagSet("prune expired", flag.ExitOnError)
 		dsn := config.PrivateStringFlag(fs, "dsn", os.Getenv(config.QueueDatabaseEnv), "Postgres DSN")
-		limit := fs.Int("limit", 0, "Max tasks to delete (0 = no limit)")
-		dryRun := fs.Bool("dry-run", false, "Show count without deleting")
+		limit := fs.Int("limit", 0, "Max preview candidates or actual deletions (0 = no limit)")
+		dryRun := fs.Bool("dry-run", false, "Count finalization or deletion candidates without changing tasks")
 		if err := fs.Parse(args[1:]); err != nil {
 			log.Fatal(err)
 		}
@@ -638,7 +638,7 @@ func runPrune(args []string) {
 			log.Fatal(err)
 		}
 		if *dryRun {
-			fmt.Printf("Would prune %d expired task(s)\n", count)
+			fmt.Printf("%d expired task(s) eligible for finalization or deletion\n", count)
 			return
 		}
 		fmt.Printf("Pruned %d expired task(s)\n", count)

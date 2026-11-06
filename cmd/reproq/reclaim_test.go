@@ -96,6 +96,32 @@ func TestPruneCLIRejectsNegativeLimitBeforeOpeningDatabase(t *testing.T) {
 	}
 }
 
+func TestPruneExpiredCLIReportsCandidatesWithoutDeleting(t *testing.T) {
+	dsn := testdatabase.URL(t)
+	ctx := context.Background()
+	pool, err := db.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	name := fmt.Sprintf("cli-prune-%d", time.Now().UnixNano())
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	var id int64
+	if err := pool.QueryRow(ctx, `INSERT INTO public.task_runs(spec_version,spec_hash,queue_name,spec_json,expires_at)
+		VALUES(1,$1,$2,'{"task_path":"owned.cli.task"}',clock_timestamp()-interval '1 day') RETURNING result_id`, hash, name).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(ctx, "DELETE FROM public.task_runs WHERE result_id=$1", id)
+	output, err := cliChild(t, "prune", dsn, "expired", "--limit", "1", "--dry-run")
+	if err != nil || !strings.Contains(string(output), "1 expired task(s) eligible for finalization or deletion") {
+		t.Fatalf("invalid expired candidate preview: %s", output)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, "SELECT status FROM public.task_runs WHERE result_id=$1", id).Scan(&status); err != nil || status != "READY" {
+		t.Fatalf("preview modified task state: %s, %v", status, err)
+	}
+}
+
 func TestReclaimCLIIntegration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://owned-business@127.0.0.1:1/business_database_must_not_be_used")
 	dsn := testdatabase.URL(t)
