@@ -197,8 +197,10 @@ another workflow member remains active, including unknown states.
 
 History accepts `finished_at`, `started_at`, `enqueued_at` or `updated_at`; null
 timestamps are excluded. Its JSON response is exactly `count` and `dry_run`.
-Dry runs count currently eligible rows without changing them. Positive limits
-bound both reported eligibility and actual deletions; zero is unbounded.
+Dry runs count currently eligible rows. The expired-task preview includes pending
+tasks eligible for finalization. A real run can finalize a task and retain its
+row while another workflow member is active. Positive limits bound the preview
+count and actual deletions. Zero is unbounded.
 Maintenance uses bounded batches and skips locked scopes so unrelated work can
 progress. Each pass has a fixed upper ID and cursor: retained history can become
 eligible on a later pass. Only acknowledged deletions increment
@@ -279,17 +281,20 @@ default execution timeout. Both infrastructure and task failures consume the
 stored attempt budget. Cancellation terminates the owned subprocess group (a
 Job Object on Windows), and pipe draining and worker shutdown are bounded.
 
-### Unreleased executor Python selection
+<a id="unreleased-executor-python-selection"></a>
 
-The Go 0.0.145 candidate exposes the existing `worker.python_bin` configuration
+### Executor Python selection
+
+[Worker v0.0.145](https://github.com/adpena/reproq-worker/releases/tag/v0.0.145)
+exposes the existing `worker.python_bin` configuration
 as `--python-bin` and advertises `worker_python_bin:1` in its versioned operations.
 The standalone default remains `python3`. An explicit CLI value overrides a file
 value. The matching Django SDK defaults to the interpreter selected by `uv run`,
 honors explicit file/CLI choices, and omits this optional value from portable
 generated templates. `uv run python manage.py reproq config --explain`, `check`,
-and `doctor` expose the selected runtime and verify compatibility. Publish and
-install matching reviewed Go and SDK artifacts before deploying this unreleased
-behavior; schema2 and executor protocol2 are unchanged.
+and `doctor` expose the selected runtime and verify compatibility. Install
+worker v0.0.145 with [Django SDK 0.1.532](https://pypi.org/project/reproq-django/0.1.532/)
+and apply the schema-v2 queue migrations before starting the worker.
 
 ### Worker Tuning
 | Flag | Default | Description |
@@ -397,9 +402,8 @@ only and delegates to these same targets.
 Release builds reject any compiler that differs from the exact `go.mod` patch
 and record the Go executable hash in the build manifest. Contributors can run
 `go test` directly with another compiler, but that does not qualify its security
-or release artifacts. Version 0.0.145 is an unpublished security
-candidate; the existing v0.0.144 release assets remain unchanged until a separate
-reviewed release decision.
+or release artifacts. The [v0.0.145 release](https://github.com/adpena/reproq-worker/releases/tag/v0.0.145)
+records the exact Go compiler, build flags and artifact checksums.
 
 ### Run Integration Tests
 Prepare a dedicated local PostgreSQL database named `reproq_test_<suffix>` and
