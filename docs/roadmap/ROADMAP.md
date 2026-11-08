@@ -1,48 +1,39 @@
-# Reproq Worker Roadmap
+# ReproQ Worker Roadmap
 
-Historical items below describe earlier releases. Current protocol 2 queue
-configuration uses `REPROQ_DATABASE_URL`; the Python business `DATABASE_URL`
-remains separate. The current README is the supported configuration reference.
+## Current baseline
 
-## Scope and intent
-This roadmap converts current gaps and partial implementations into a sequenced delivery plan.
-Detailed items live in `docs/roadmap/BACKLOG.md`.
+[Worker v0.0.145](https://github.com/adpena/reproq-worker/releases/tag/v0.0.145)
+and [Django SDK 0.1.532](https://pypi.org/project/reproq-django/0.1.532/)
+are the documented release pair. Pin the explicit worker tag and the platform
+artifact checksum. The worker uses protocol 2 and checks the schema-v2 queue
+contract before taking work. Committed Django migrations own that schema.
+The Go queue uses `REPROQ_DATABASE_URL`, and Python tasks keep their separate
+business `DATABASE_URL`. See [configuration and compatibility](../../README.md).
 
-## Guiding goals
-- Preserve strict worker <-> Django contract stability.
-- Prioritize correctness and operational safety before new surface area.
-- Keep CLI and docs in parity with shipped functionality.
+Main includes the expiry preview change from `98ace75`. On that source,
+`reproq prune expired --dry-run` reports candidates for finalization or
+deletion. An actual prune reports deletions. The change awaits a tagged release.
 
-## Phase 0: Core correctness and CLI parity (P0)
-Goal: remove user-facing footguns and align runtime metadata.
+## Next work
 
-Deliverables
-- Fix worker DSN handling so `reproq worker --dsn` works without `DATABASE_URL`. (BL-001)
-- Use the worker Version constant when registering workers. (BL-002)
-- Add `WAITING` to the TaskStatus enum to reflect workflows. (BL-003)
-- Implement queue round-robin and make multi-queue configuration real. (BL-004)
-- Add `reproq cancel` CLI and a DB update path for `cancel_requested`. (BL-005)
+1. Qualify the exact candidate source. Run `make check` with the Go patch in
+   `go.mod` and the pinned linter. Run `make test-integration` against an owned
+   loopback PostgreSQL test database prepared by the matching Django migrations.
+   Confirm that the preview leaves task state intact and that retained expired
+   callbacks do not prevent other eligible rows from being pruned.
+2. Rehearse the candidate worker and SDK together. Record their exact source
+   or artifact identities, protocol and schema checks, selected Python
+   interpreter, and an end-to-end task receipt on the target runtime. Exercise
+   the queue and business DSNs separately. [Executor contract](../../README.md#executor-python-selection)
+3. When ready to release, build and verify the checksummed assets from a
+   reviewed tag. Review the draft and its runtime evidence before publication.
+   [Release procedure](../../DEPLOYMENT.md#3-manual-release-workflow)
+4. After publication, update downstream pins and rehearse deployment and
+   rollback with the matching worker and SDK. Confirm the active worker
+   identity and a canary task before expanding the rollout.
 
-## Phase 1: Operability and safety (P1)
-Goal: improve triage, observability, and security posture.
+## Completed work
 
-Deliverables
-- Dead letter queue (DLQ) + triage CLI and schema fields. (BL-006)
-- Wire health/metrics HTTP server and config. (BL-007)
-- Enforce task path allow-list validation. (BL-008)
-- Redact sensitive payloads from logs. (BL-009)
-- Add replay by spec_hash for deterministic replays. (BL-010, completed 2025-12-30)
-- Resolve CLI/documentation parity for listed commands. (BL-011, completed 2025-12-30)
-
-## Phase 2: Productization and UX (P2)
-Goal: make the worker easier to operate at scale and easier to debug.
-
-Deliverables
-- Persist stdout/stderr or artifact URIs for executions. (BL-012, completed 2025-12-30)
-- Implement retention/cleanup using `expires_at`. (BL-013, completed 2025-12-30)
-- Decide on and implement missing CLI utilities (schedule/verify/loadgen/torture). (BL-014, completed 2025-12-30)
-
-## Sequencing notes
-- Items that add or change schema require a migration and cross-project model sync.
-- Items touching the JSON protocol must be coordinated with `reproq-django`.
-- Each phase should include docs updates and CLI help alignment.
+The original phases for correctness, operability, security, and CLI coverage
+are recorded in the [historical backlog](BACKLOG.md). It contains the completion
+dates and acceptance criteria for BL-001 through BL-014.
