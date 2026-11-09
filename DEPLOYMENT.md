@@ -24,6 +24,22 @@ unpublished draft from canonical artifacts. It refuses an existing release.
 Review local checks, artifacts, checksums, and runtime evidence before a separate
 publication decision. It does not publish automatically when a tag is pushed.
 
+Promote a reviewed draft with the same artifact directory and the trusted
+manifest and checksum-set SHA-256 values from qualification:
+
+```bash
+scripts/publish_release.sh adpena/reproq-worker v0.0.146 dist/tagged-candidate \
+  "$MANIFEST_SHA256" "$CHECKSUMS_SHA256"
+```
+
+The command compares the remote tag, uploaded asset digests, and local bundle
+before promoting the draft. It verifies the public release and preserves the
+existing `latest` pointer. In the official repository, that pointer stays at
+v0.0.144 for SDK 0.1.530. Current SDKs install the exact Worker tag they qualify.
+Assign one operator for promotion and leave the draft, assets, tag, and latest
+pointer alone until readback completes. If a publication response is uncertain,
+inspect the release and pointer before taking further action.
+
 ## Runtime container
 
 After building a canonical bundle from the clean committed source:
