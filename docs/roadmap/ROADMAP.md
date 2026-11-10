@@ -2,25 +2,25 @@
 
 ## Current baseline
 
-[Worker v0.0.145](https://github.com/adpena/reproq-worker/releases/tag/v0.0.145)
-and [Django SDK 0.1.532](https://pypi.org/project/reproq-django/0.1.532/)
-are the documented release pair. Pin the explicit worker tag and the platform
-artifact checksum. The worker uses protocol 2 and checks the schema-v2 queue
+[Worker v0.0.146](https://github.com/adpena/reproq-worker/releases/tag/v0.0.146)
+and [Django SDK 0.1.534](https://pypi.org/project/reproq-django/0.1.534/)
+are the current release pair. Pin the explicit worker tag and the platform
+artifact checksum. GitHub's Latest pointer remains at v0.0.144 for older
+SDKs. The worker uses protocol 2 and checks the schema-v2 queue
 contract before taking work. Committed Django migrations own that schema.
 The Go queue uses `REPROQ_DATABASE_URL`, and Python tasks keep their separate
 business `DATABASE_URL`. See [configuration and compatibility](../../README.md).
 
-Main includes the expiry preview change from `98ace75`. On that source,
+Worker v0.0.146 includes the expiry preview change from `98ace75`.
 `reproq prune expired --dry-run` reports candidates for finalization or
-deletion. An actual prune reports deletions. The change awaits a tagged release.
+deletion. An actual prune reports deletions.
 
 ## Next work
 
-1. Qualify the exact candidate source. Run `make check` with the Go patch in
+1. For the next candidate, run `make check` with the Go patch in
    `go.mod` and the pinned linter. Run `make test-integration` against an owned
    loopback PostgreSQL test database prepared by the matching Django migrations.
-   Confirm that the preview leaves task state intact and that retained expired
-   callbacks do not prevent other eligible rows from being pruned.
+   Keep the expiry preview and retained-callback regression checks in the gate.
 2. Rehearse the candidate worker and SDK together. Record their exact source
    or artifact identities, protocol and schema checks, selected Python
    interpreter, and an end-to-end task receipt on the target runtime. Exercise

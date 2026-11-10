@@ -70,7 +70,7 @@ For reviewable cross-platform candidates from a clean, committed checkout:
 ```bash
 make release-build OUT=dist/candidate
 # After a separately reviewed tag already exists and identifies HEAD:
-make release-build TAG=v0.0.145 OUT=dist/tagged-candidate
+make release-build TAG=v0.0.146 OUT=dist/tagged-candidate
 ```
 
 The canonical builder produces five production binaries with `CGO_ENABLED=0`,
@@ -292,9 +292,10 @@ The standalone default remains `python3`. An explicit CLI value overrides a file
 value. The matching Django SDK defaults to the interpreter selected by `uv run`,
 honors explicit file/CLI choices, and omits this optional value from portable
 generated templates. `uv run python manage.py reproq config --explain`, `check`,
-and `doctor` expose the selected runtime and verify compatibility. Install
-worker v0.0.145 with [Django SDK 0.1.532](https://pypi.org/project/reproq-django/0.1.532/)
-and apply the schema-v2 queue migrations before starting the worker.
+and `doctor` expose the selected runtime and verify compatibility. The current
+[Django SDK 0.1.534](https://pypi.org/project/reproq-django/0.1.534/)
+installs [Worker v0.0.146](https://github.com/adpena/reproq-worker/releases/tag/v0.0.146)
+by default. Apply the schema-v2 queue migrations before starting the worker.
 
 ### Worker Tuning
 | Flag | Default | Description |
@@ -402,7 +403,7 @@ only and delegates to these same targets.
 Release builds reject any compiler that differs from the exact `go.mod` patch
 and record the Go executable hash in the build manifest. Contributors can run
 `go test` directly with another compiler, but that does not qualify its security
-or release artifacts. The [v0.0.145 release](https://github.com/adpena/reproq-worker/releases/tag/v0.0.145)
+or release artifacts. The [v0.0.146 release](https://github.com/adpena/reproq-worker/releases/tag/v0.0.146)
 records the exact Go compiler, build flags and artifact checksums.
 
 ### Run Integration Tests
