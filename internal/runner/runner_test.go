@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 type fakeQueue struct {
 	registeredVersion string
 	registerCalls     int
+	reclaimedQueues   chan []string
 }
 
 func (f *fakeQueue) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {
@@ -28,7 +30,14 @@ func (f *fakeQueue) RegisterWorker(ctx context.Context, id, hostname string, con
 	return nil
 }
 
-func (f *fakeQueue) Reclaim(ctx context.Context) (int64, error) {
+func (f *fakeQueue) ReclaimQueues(ctx context.Context, names []string) (int64, error) {
+	if f.reclaimedQueues != nil {
+		select {
+		case f.reclaimedQueues <- slices.Clone(names):
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 	return 0, nil
 }
 
@@ -57,6 +66,33 @@ func (f *fakeQueue) CompleteFailure(ctx context.Context, resultID int64, workerI
 
 type fakeExecutor struct{}
 
+func TestAutomaticReclaimUsesWorkerQueuesAtStartupAndOnTick(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.QueueNames = []string{"account-mail", "small-jobs"}
+	cfg.ReclaimIntervalSeconds = 1
+	q := &fakeQueue{reclaimedQueues: make(chan []string)}
+	r := New(cfg, q, &fakeExecutor{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- r.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	for _, stage := range []string{"startup", "tick"} {
+		select {
+		case got := <-q.reclaimedQueues:
+			if !slices.Equal(got, cfg.QueueNames) {
+				t.Fatalf("%s reclaim queues = %v, want %v", stage, got, cfg.QueueNames)
+			}
+		case <-ctx.Done():
+			t.Fatalf("no automatic reclaim on %s", stage)
+		}
+	}
+}
+
 func (f *fakeExecutor) Execute(ctx context.Context, claim executor.Claim, payload json.RawMessage, timeout time.Duration) (*executor.ResultEnvelope, string, string, error) {
 	return nil, "", "", nil
 }
@@ -71,7 +107,7 @@ func (v *validationQueue) RegisterWorker(ctx context.Context, id, hostname strin
 	return nil
 }
 
-func (v *validationQueue) Reclaim(ctx context.Context) (int64, error) {
+func (v *validationQueue) ReclaimQueues(ctx context.Context, names []string) (int64, error) {
 	return 0, nil
 }
 
@@ -128,7 +164,7 @@ func (c *cancelQueue) RegisterWorker(ctx context.Context, id, hostname string, c
 	return nil
 }
 
-func (c *cancelQueue) Reclaim(ctx context.Context) (int64, error) {
+func (c *cancelQueue) ReclaimQueues(ctx context.Context, names []string) (int64, error) {
 	return 0, nil
 }
 
@@ -171,7 +207,7 @@ func (r *roundRobinQueue) RegisterWorker(ctx context.Context, id, hostname strin
 	return nil
 }
 
-func (r *roundRobinQueue) Reclaim(ctx context.Context) (int64, error) {
+func (r *roundRobinQueue) ReclaimQueues(ctx context.Context, names []string) (int64, error) {
 	return 0, nil
 }
 

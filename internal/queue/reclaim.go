@@ -3,11 +3,11 @@ package queue
 import (
 	"context"
 	"errors"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"strconv"
-	"time"
 )
 
 type ReclaimOptions struct {
@@ -16,6 +16,8 @@ type ReclaimOptions struct {
 	Limit            int
 	IncludeNullLease bool
 	DryRun           bool
+	// Nil is database-wide maintenance. A nonnil slice restricts expired claim roots.
+	QueueNames []string
 }
 type ReclaimResult struct {
 	Count     int64 `json:"count"`
@@ -37,6 +39,21 @@ func (s *Service) Reclaim(ctx context.Context) (int64, error) {
 	return result.Count, err
 }
 
+func (s *Service) ReclaimQueues(ctx context.Context, names []string) (int64, error) {
+	if len(names) == 0 {
+		return 0, errors.New("automatic reclaim requires at least one queue")
+	}
+	result, err := s.ReclaimWithOptions(ctx, ReclaimOptions{Action: "requeue", QueueNames: names})
+	return result.Count, err
+}
+
+func reclaimQueueFilter(args []any, names []string) (string, []any) {
+	if names == nil {
+		return "", args
+	}
+	return " AND task.queue_name=ANY($" + strconv.Itoa(len(args)+1) + "::text[])", append(args, names)
+}
+
 func (s *Service) ReclaimWithOptions(ctx context.Context, options ReclaimOptions) (ReclaimResult, error) {
 	result := ReclaimResult{DryRun: options.DryRun}
 	if options.Action == "" {
@@ -49,8 +66,9 @@ func (s *Service) ReclaimWithOptions(ctx context.Context, options ReclaimOptions
 	eligibility := `status='RUNNING' AND ((leased_until IS NOT NULL AND leased_until<=clock_timestamp()-($1::text||' microseconds')::interval)
  OR($2::boolean AND leased_until IS NULL))`
 	if options.DryRun {
-		err := s.pool.QueryRow(ctx, `SELECT count(*) FROM(SELECT result_id FROM public.task_runs WHERE `+eligibility+`
-   ORDER BY leased_until NULLS FIRST,result_id LIMIT NULLIF($3::bigint,0)) eligible`, age, options.IncludeNullLease, options.Limit).Scan(&result.Count)
+		filter, args := reclaimQueueFilter([]any{age, options.IncludeNullLease, options.Limit}, options.QueueNames)
+		err := s.pool.QueryRow(ctx, `SELECT count(*) FROM(SELECT result_id FROM public.task_runs task WHERE `+eligibility+filter+`
+   ORDER BY leased_until NULLS FIRST,result_id LIMIT NULLIF($3::bigint,0)) eligible`, args...).Scan(&result.Count)
 		return result, err
 	}
 	// A finite start-of-pass boundary excludes new claims and newly inserted work.
@@ -73,11 +91,12 @@ func (s *Service) ReclaimWithOptions(ctx context.Context, options ReclaimOptions
 				size = remaining
 			}
 		}
-		rows, err := s.pool.Query(ctx, `SELECT result_id,leased_by,lease_token,leased_until FROM public.task_runs
+		filter, args := reclaimQueueFilter([]any{age, options.IncludeNullLease, size, hasCursor, cursor, cursorID, upperID, asOf}, options.QueueNames)
+		rows, err := s.pool.Query(ctx, `SELECT result_id,leased_by,lease_token,leased_until FROM public.task_runs task
    WHERE status='RUNNING' AND result_id<=$7 AND((leased_until IS NOT NULL AND leased_until<=$8::timestamptz-($1::text||' microseconds')::interval)
     OR($2::boolean AND leased_until IS NULL))
-    AND(NOT $4::boolean OR(COALESCE(leased_until,'-infinity'::timestamptz),result_id)>($5::timestamptz,$6::bigint))
-   ORDER BY leased_until NULLS FIRST,result_id LIMIT $3`, age, options.IncludeNullLease, size, hasCursor, cursor, cursorID, upperID, asOf)
+    AND(NOT $4::boolean OR(COALESCE(leased_until,'-infinity'::timestamptz),result_id)>($5::timestamptz,$6::bigint))`+filter+`
+   ORDER BY leased_until NULLS FIRST,result_id LIMIT $3`, args...)
 		if err != nil {
 			return result, err
 		}
@@ -116,6 +135,7 @@ func (s *Service) ReclaimWithOptions(ctx context.Context, options ReclaimOptions
 				tokens[i] = candidate.token
 				leases[i] = candidate.until
 			}
+			filter, args := reclaimQueueFilter([]any{selected, owners, tokens, leases, age, options.IncludeNullLease, options.Action == "requeue"}, options.QueueNames)
 			changed, err := tx.Query(ctx, `WITH selected AS(SELECT * FROM unnest($1::bigint[],$2::text[],$3::uuid[],$4::timestamptz[]) AS claim(result_id,leased_by,lease_token,leased_until))
     UPDATE public.task_runs task SET
      status=CASE WHEN task.cancel_requested THEN 'CANCELLED' WHEN $7::boolean AND task.attempts<task.max_attempts THEN 'READY' ELSE 'FAILED' END,
@@ -130,7 +150,7 @@ func (s *Service) ReclaimWithOptions(ctx context.Context, options ReclaimOptions
      AND task.leased_by IS NOT DISTINCT FROM selected.leased_by AND task.lease_token IS NOT DISTINCT FROM selected.lease_token
      AND task.leased_until IS NOT DISTINCT FROM selected.leased_until
      AND((task.leased_until IS NOT NULL AND task.leased_until<=clock_timestamp()-($5::text||' microseconds')::interval)
-      OR($6::boolean AND task.leased_until IS NULL)) RETURNING task.result_id,task.status`, selected, owners, tokens, leases, age, options.IncludeNullLease, options.Action == "requeue")
+      OR($6::boolean AND task.leased_until IS NULL))`+filter+` RETURNING task.result_id,task.status`, args...)
 			if err != nil {
 				return nil, err
 			}

@@ -45,7 +45,7 @@ type Runner struct {
 
 type QueueService interface {
 	RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error
-	Reclaim(ctx context.Context) (int64, error)
+	ReclaimQueues(ctx context.Context, names []string) (int64, error)
 	UpdateWorkerHeartbeat(ctx context.Context, id string) error
 	Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error)
 	Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error)
@@ -80,13 +80,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 
 	if r.cfg.ReclaimIntervalSeconds > 0 {
-		reclaimStart := time.Now()
-		if reclaimed, err := r.queue.Reclaim(ctx); err != nil {
-			r.logger.Warn("Failed to reclaim expired tasks", "error", err)
-		} else if reclaimed > 0 {
-			r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
-		}
-		dbOpDuration.WithLabelValues("reclaim").Observe(time.Since(reclaimStart).Seconds())
+		r.reclaimExpired(ctx)
 
 		go func() {
 			ticker := time.NewTicker(time.Duration(r.cfg.ReclaimIntervalSeconds) * time.Second)
@@ -96,14 +90,7 @@ func (r *Runner) Start(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					reclaimStart := time.Now()
-					reclaimed, err := r.queue.Reclaim(ctx)
-					if err != nil {
-						r.logger.Warn("Failed to reclaim expired tasks", "error", err)
-					} else if reclaimed > 0 {
-						r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
-					}
-					dbOpDuration.WithLabelValues("reclaim").Observe(time.Since(reclaimStart).Seconds())
+					r.reclaimExpired(ctx)
 				}
 			}
 		}()
@@ -149,6 +136,17 @@ func (r *Runner) Start(ctx context.Context) error {
 			go r.runTask(ctx, task)
 		}
 	}
+}
+
+func (r *Runner) reclaimExpired(ctx context.Context) {
+	started := time.Now()
+	reclaimed, err := r.queue.ReclaimQueues(ctx, r.cfg.QueueNames)
+	if err != nil {
+		r.logger.Warn("Failed to reclaim expired tasks", "error", err)
+	} else if reclaimed > 0 {
+		r.logger.Info("Reclaimed expired tasks", "count", reclaimed)
+	}
+	dbOpDuration.WithLabelValues("reclaim").Observe(time.Since(started).Seconds())
 }
 
 func (r *Runner) waitForTasks() error {

@@ -6,6 +6,55 @@ import (
 	"time"
 )
 
+func TestScopedReclaimPreservesOtherQueues(t *testing.T) {
+	ctx, pool, service, included := ownedFencedQueue(t)
+	_, _, _, excluded := ownedFencedQueue(t)
+	includedID := insertFencedFixture(t, pool, included, 0, nil, nil, 0)
+	excludedID := insertFencedFixture(t, pool, excluded, 0, nil, nil, 0)
+	for _, name := range []string{included, excluded} {
+		if _, err := service.Claim(ctx, "reclaim-owner", name, 60, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE public.task_runs SET leased_until=clock_timestamp()-
+		CASE WHEN result_id=$2 THEN interval '2 hours' ELSE interval '1 hour' END
+		WHERE result_id IN ($1,$2)`, includedID, excludedID); err != nil {
+		t.Fatal(err)
+	}
+	readExcluded := func() string {
+		t.Helper()
+		var raw string
+		if err := pool.QueryRow(ctx, "SELECT to_jsonb(task)::text FROM public.task_runs task WHERE result_id=$1", excludedID).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	before := readExcluded()
+	if _, err := service.ReclaimQueues(ctx, nil); err == nil {
+		t.Fatal("empty automatic reclaim scope must fail")
+	}
+	options := ReclaimOptions{QueueNames: []string{}, DryRun: true}
+	if result, err := service.ReclaimWithOptions(ctx, options); err != nil || result.Count != 0 {
+		t.Fatalf("empty explicit scope = %+v, %v", result, err)
+	}
+	options.QueueNames = []string{included}
+	if result, err := service.ReclaimWithOptions(ctx, options); err != nil || result.Count != 1 {
+		t.Fatalf("scoped dry run = %+v, %v", result, err)
+	}
+	options.DryRun = false
+	options.Limit = 1
+	if result, err := service.ReclaimWithOptions(ctx, options); err != nil || result.Requeued != 1 {
+		t.Fatalf("scoped reclaim = %+v, %v", result, err)
+	}
+	var status TaskStatus
+	if err := pool.QueryRow(ctx, "SELECT status FROM public.task_runs WHERE result_id=$1", includedID).Scan(&status); err != nil || status != StatusReady {
+		t.Fatalf("included claim status = %s, %v", status, err)
+	}
+	if readExcluded() != before {
+		t.Fatal("out-of-scope claim changed")
+	}
+}
+
 func TestReclaimOptionsKeepExpiryAgeAndLimitFencesAndDryRunIsReadOnly(t *testing.T) {
 	ctx, pool, service, name := ownedFencedQueue(t)
 	ids := []int64{}

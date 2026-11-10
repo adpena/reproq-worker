@@ -158,6 +158,8 @@ Inspect or recover expired claims through the same transition used by automatic 
 
 Set `REPROQ_DATABASE_URL` in the process environment. `--action fail` terminally fails eligible claims; `requeue` respects each task's stored attempt budget. Expired cancelled claims become `CANCELLED`. `--include-null-lease` explicitly includes legacy `RUNNING` rows without a lease timestamp. A zero limit is unbounded; dry runs make no row changes. No application startup or Python workflow reimplementation is needed.
 
+Automatic reclaim checks expired claims in the worker's configured queues. If no worker serves a queue, use the database-wide `reclaim` command to inspect and recover its expired claims. Workflow finalization still follows dependencies across queues.
+
 ### `triage`
 List, inspect, and retry failed tasks.
 
