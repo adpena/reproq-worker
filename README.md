@@ -70,7 +70,7 @@ For reviewable cross-platform candidates from a clean, committed checkout:
 ```bash
 make release-build OUT=dist/candidate
 # After a separately reviewed tag already exists and identifies HEAD:
-make release-build TAG=v0.0.146 OUT=dist/tagged-candidate
+make release-build TAG=v0.0.147 OUT=dist/tagged-candidate
 ```
 
 The canonical builder produces five production binaries with `CGO_ENABLED=0`,

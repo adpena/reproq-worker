@@ -28,7 +28,7 @@ Promote a reviewed draft with the same artifact directory and the trusted
 manifest and checksum-set SHA-256 values from qualification:
 
 ```bash
-scripts/publish_release.sh adpena/reproq-worker v0.0.146 dist/tagged-candidate \
+scripts/publish_release.sh adpena/reproq-worker v0.0.147 dist/tagged-candidate \
   "$MANIFEST_SHA256" "$CHECKSUMS_SHA256"
 ```
 

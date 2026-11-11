@@ -15,6 +15,13 @@ Worker v0.0.146 includes the expiry preview change from `98ace75`.
 `reproq prune expired --dry-run` reports candidates for finalization or
 deletion. An actual prune reports deletions.
 
+## Prepared candidate
+
+Worker 0.0.147 prepares scoped automatic lease recovery, a read-only eligibility
+probe for idle queues, and on-demand PostgreSQL connections in low memory mode.
+The candidate uses schema v2 and executor protocol 2. Qualify the tagged
+artifacts and the matching SDK before downstream promotion.
+
 ## Next work
 
 1. For the next candidate, run `make check` with the Go patch in
