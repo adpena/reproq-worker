@@ -109,6 +109,8 @@ Starts the task processing daemon. It polls the database for `READY` tasks and e
 ./reproq worker --dsn "postgres://..." --concurrency 20
 ```
 
+After an empty claim round, the worker uses one read-only query for due tasks across its configured queues. A positive result resumes fenced claims. The polling interval and claim rules remain in force.
+
 ### `beat`
 Starts the periodic task scheduler for definitions assigned to the `go` provider.
 

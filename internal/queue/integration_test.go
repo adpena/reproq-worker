@@ -14,6 +14,48 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestHasDueTasksUsesClaimTimeAndQueueFilters(t *testing.T) {
+	ctx, pool, service, selected := ownedFencedQueue(t)
+	_, _, _, other := ownedFencedQueue(t)
+	future := insertFencedFixture(t, pool, selected, 0, nil, nil, 0)
+	expired := insertFencedFixture(t, pool, selected, 1, nil, nil, 0)
+	exhausted := insertFencedFixture(t, pool, selected, 2, nil, nil, 0)
+	insertFencedFixture(t, pool, other, 0, nil, nil, 0)
+	if _, err := pool.Exec(ctx, `UPDATE public.task_runs SET
+		run_after=CASE WHEN result_id=$1 THEN clock_timestamp()+interval '1 hour' ELSE NULL END,
+		expires_at=CASE WHEN result_id=$2 THEN clock_timestamp()-interval '1 hour' ELSE NULL END,
+		attempts=CASE WHEN result_id=$3 THEN max_attempts ELSE attempts END
+		WHERE result_id IN ($1,$2,$3)`, future, expired, exhausted); err != nil {
+		t.Fatal(err)
+	}
+	if due, err := service.HasDueTasks(ctx, []string{selected}); err != nil || due {
+		t.Fatalf("selected queue due = %t, %v", due, err)
+	}
+	if due, err := service.HasDueTasks(ctx, []string{selected, other}); err != nil || !due {
+		t.Fatalf("ready row in second selected queue due = %t, %v", due, err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO public.reproq_queue_controls(queue_name, paused) VALUES($1, true)", other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM public.reproq_queue_controls WHERE queue_name=$1", other); err != nil {
+			t.Error(err)
+		}
+	})
+	if due, err := service.HasDueTasks(ctx, []string{selected, other}); err != nil || due {
+		t.Fatalf("only paused work due = %t, %v", due, err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE public.task_runs SET run_after=clock_timestamp()-interval '1 second' WHERE result_id=$1", future); err != nil {
+		t.Fatal(err)
+	}
+	if due, err := service.HasDueTasks(ctx, []string{selected}); err != nil || !due {
+		t.Fatalf("formerly scheduled row due = %t, %v", due, err)
+	}
+	if task, err := service.Claim(ctx, "probe-fixture", selected, 60, 0); err != nil || task == nil || task.ResultID != future {
+		t.Fatalf("fenced claim after probe = %v, %v", task, err)
+	}
+}
+
 func TestQueueIntegration(t *testing.T) {
 	dsn := testdatabase.URL(t)
 

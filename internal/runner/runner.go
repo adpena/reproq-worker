@@ -47,6 +47,7 @@ type QueueService interface {
 	RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error
 	ReclaimQueues(ctx context.Context, names []string) (int64, error)
 	UpdateWorkerHeartbeat(ctx context.Context, id string) error
+	HasDueTasks(ctx context.Context, queues []string) (bool, error)
 	Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error)
 	Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error)
 	CompleteSuccess(ctx context.Context, resultID int64, workerID, leaseToken string, returnJSON json.RawMessage, logsURI *string) error
@@ -113,6 +114,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	}()
 
 	// Simple round-robin or fair polling across configured queues
+	idle := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -120,10 +122,11 @@ func (r *Runner) Start(ctx context.Context) error {
 			return r.waitForTasks()
 		case r.pool <- struct{}{}:
 			// Acquired a slot in the pool
-			task, err := r.poll(ctx)
+			task, err := r.pollWhenReady(ctx, idle)
+			idle = errors.Is(err, queue.ErrNoTasks)
 			if err != nil {
 				<-r.pool // Release slot
-				if errors.Is(err, queue.ErrNoTasks) {
+				if idle {
 					r.sleep(ctx)
 					continue
 				}
@@ -169,6 +172,23 @@ func (r *Runner) waitForTasks() error {
 	case <-timer.C:
 		return fmt.Errorf("tasks did not stop within shutdown timeout %s", shutdownTimeout)
 	}
+}
+
+func (r *Runner) pollWhenReady(ctx context.Context, idle bool) (*queue.TaskRun, error) {
+	if !idle || len(r.cfg.QueueNames) == 0 {
+		return r.poll(ctx)
+	}
+	started := time.Now()
+	due, err := r.queue.HasDueTasks(ctx, r.cfg.QueueNames)
+	dbOpDuration.WithLabelValues("idle_probe").Observe(time.Since(started).Seconds())
+	if err != nil {
+		return nil, err
+	}
+	if !due {
+		r.queueIdx = (r.queueIdx + 1) % len(r.cfg.QueueNames)
+		return nil, queue.ErrNoTasks
+	}
+	return r.poll(ctx)
 }
 
 func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {

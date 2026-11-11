@@ -45,6 +45,8 @@ func (f *fakeQueue) UpdateWorkerHeartbeat(ctx context.Context, id string) error 
 	return nil
 }
 
+func (f *fakeQueue) HasDueTasks(context.Context, []string) (bool, error) { return false, nil }
+
 func (f *fakeQueue) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error) {
 	return nil, queue.ErrNoTasks
 }
@@ -115,6 +117,8 @@ func (v *validationQueue) UpdateWorkerHeartbeat(ctx context.Context, id string) 
 	return nil
 }
 
+func (v *validationQueue) HasDueTasks(context.Context, []string) (bool, error) { return false, nil }
+
 func (v *validationQueue) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error) {
 	return nil, queue.ErrNoTasks
 }
@@ -172,6 +176,8 @@ func (c *cancelQueue) UpdateWorkerHeartbeat(ctx context.Context, id string) erro
 	return nil
 }
 
+func (c *cancelQueue) HasDueTasks(context.Context, []string) (bool, error) { return false, nil }
+
 func (c *cancelQueue) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error) {
 	return nil, queue.ErrNoTasks
 }
@@ -201,6 +207,7 @@ func (b *blockingExecutor) Execute(ctx context.Context, claim executor.Claim, pa
 type roundRobinQueue struct {
 	tasks  map[string][]*queue.TaskRun
 	claims []string
+	probes [][]string
 }
 
 func (r *roundRobinQueue) RegisterWorker(ctx context.Context, id, hostname string, concurrency int, queues []string, version string) error {
@@ -215,6 +222,16 @@ func (r *roundRobinQueue) UpdateWorkerHeartbeat(ctx context.Context, id string) 
 	return nil
 }
 
+func (r *roundRobinQueue) HasDueTasks(_ context.Context, names []string) (bool, error) {
+	r.probes = append(r.probes, slices.Clone(names))
+	for _, name := range names {
+		if len(r.tasks[name]) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *roundRobinQueue) Claim(ctx context.Context, workerID string, queueName string, leaseSeconds int, priorityAgingFactor float64) (*queue.TaskRun, error) {
 	r.claims = append(r.claims, queueName)
 	if len(r.tasks[queueName]) == 0 {
@@ -223,6 +240,86 @@ func (r *roundRobinQueue) Claim(ctx context.Context, workerID string, queueName 
 	task := r.tasks[queueName][0]
 	r.tasks[queueName] = r.tasks[queueName][1:]
 	return task, nil
+}
+
+func TestIdleProbeSkipsEmptyClaimsAndRetainsQueueRotation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.QueueNames = []string{"first", "second", "third"}
+	q := &roundRobinQueue{tasks: make(map[string][]*queue.TaskRun)}
+	r := New(cfg, q, &fakeExecutor{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+	if _, err := r.pollWhenReady(ctx, false); !errors.Is(err, queue.ErrNoTasks) {
+		t.Fatalf("initial claim = %v", err)
+	}
+	if _, err := r.pollWhenReady(ctx, true); !errors.Is(err, queue.ErrNoTasks) {
+		t.Fatalf("empty probe = %v", err)
+	}
+	if !slices.Equal(q.claims, cfg.QueueNames) || len(q.probes) != 1 || !slices.Equal(q.probes[0], cfg.QueueNames) {
+		t.Fatalf("empty path claims %v and probes %v", q.claims, q.probes)
+	}
+	want := &queue.TaskRun{ResultID: 41}
+	q.tasks["third"] = []*queue.TaskRun{want}
+	q.tasks["first"] = []*queue.TaskRun{{ResultID: 42}}
+	if task, err := r.pollWhenReady(ctx, true); err != nil || task != want {
+		t.Fatalf("claim after idle = %v, %v", task, err)
+	}
+	if len(q.claims) != 4 || q.claims[3] != "third" {
+		t.Fatalf("round-robin after empty probe = %v", q.claims)
+	}
+}
+
+type idleTransitionQueue struct {
+	fakeQueue
+	operations []string
+	probeCount int
+	claimCount int
+	task       *queue.TaskRun
+	stop       context.CancelFunc
+}
+
+func (q *idleTransitionQueue) HasDueTasks(ctx context.Context, _ []string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	q.probeCount++
+	q.operations = append(q.operations, "probe")
+	return q.probeCount > 1, nil
+}
+
+func (q *idleTransitionQueue) Claim(ctx context.Context, _ string, _ string, _ int, _ float64) (*queue.TaskRun, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	q.claimCount++
+	q.operations = append(q.operations, "claim")
+	if q.claimCount == 2 {
+		return q.task, nil
+	}
+	if q.claimCount == 3 {
+		q.stop()
+	}
+	return nil, queue.ErrNoTasks
+}
+
+func TestStartUsesIdleProbeAndReturnsToDirectClaimsAfterWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := config.DefaultConfig()
+	cfg.MaxConcurrency = 1
+	cfg.ReclaimIntervalSeconds = 0
+	cfg.PollMinBackoff, cfg.PollMaxBackoff = time.Millisecond, time.Millisecond
+	task := &queue.TaskRun{ResultID: 42, QueueName: "default", Attempts: 1, MaxAttempts: 1,
+		SpecJSON: json.RawMessage(`{"task_path":"tasks.fixture"}`)}
+	sealRunnerFixture(t, task)
+	q := &idleTransitionQueue{task: task, stop: cancel}
+	r := New(cfg, q, &fakeExecutor{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err := r.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"claim", "probe", "probe", "claim", "claim"}
+	if !slices.Equal(q.operations, want) {
+		t.Fatalf("worker idle transition = %v, want %v", q.operations, want)
+	}
 }
 
 func (r *roundRobinQueue) Heartbeat(ctx context.Context, resultID int64, workerID, leaseToken string, leaseSeconds int) (bool, error) {

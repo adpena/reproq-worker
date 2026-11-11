@@ -21,6 +21,15 @@ var ErrLeaseLost = errors.New("task lease expired or belongs to another claim")
 var ErrCancelRequested = errors.New("owned task claim has a cancellation request")
 var ErrLegacySpec = errors.New("legacy spec_version 0 cannot be claimed, retried or replayed by this runtime; drain queued legacy work with the old runtime before cutover or perform an explicitly audited reconciliation; historical payloads and hashes are unchanged")
 
+const dueReadyPredicate = `tr.status='READY' AND tr.attempts<tr.max_attempts
+	AND COALESCE(tr.run_after,'-infinity'::timestamptz)<=clock_timestamp()
+	AND (tr.expires_at IS NULL OR tr.expires_at>clock_timestamp())`
+
+// queueExpression is a fixed SQL identifier or placeholder selected by the caller.
+func unpausedQueueSQL(queueExpression string) string {
+	return `NOT EXISTS(SELECT 1 FROM public.reproq_queue_controls qc WHERE qc.queue_name=` + queueExpression + ` AND qc.paused)`
+}
+
 func requireCurrentSpecVersion(version int) error {
 	if version == 0 {
 		return ErrLegacySpec
@@ -58,6 +67,14 @@ func NewService(ctx context.Context, pool *pgxpool.Pool) (*Service, error) {
 	return &Service{pool: pool}, nil
 }
 
+// HasDueTasks checks a necessary claim condition without locking a row.
+func (s *Service) HasDueTasks(ctx context.Context, queues []string) (bool, error) {
+	var due bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.task_runs tr
+		WHERE tr.queue_name=ANY($1::text[]) AND `+dueReadyPredicate+` AND `+unpausedQueueSQL("tr.queue_name")+`)`, queues).Scan(&due)
+	return due, err
+}
+
 // Claim atomically reserves the candidate's shared keys, then rechecks ownership
 // in a fresh READ COMMITTED statement before transitioning the row. Advisory
 // locks never share the selection statement's earlier MVCC snapshot.
@@ -85,11 +102,9 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		err := tx.QueryRow(ctx, `
 			SELECT tr.result_id,COALESCE(tr.task_path,tr.spec_json->>'task_path'),tr.lock_key,tr.concurrency_key,tr.concurrency_limit,tr.spec_version
 			FROM public.task_runs tr
-			WHERE tr.status='READY' AND tr.attempts<tr.max_attempts AND tr.queue_name=$1
+			WHERE tr.queue_name=$1 AND `+dueReadyPredicate+`
 			 AND NOT (tr.result_id=ANY($3::bigint[]))
-			 AND COALESCE(tr.run_after,'-infinity'::timestamptz)<=clock_timestamp()
-			 AND (tr.expires_at IS NULL OR tr.expires_at>clock_timestamp())
-			 AND NOT EXISTS(SELECT 1 FROM public.reproq_queue_controls qc WHERE qc.queue_name=$1 AND qc.paused)
+			 AND `+unpausedQueueSQL("$1")+`
 			 AND (tr.lock_key IS NULL OR tr.lock_key='' OR NOT EXISTS(
 			  SELECT 1 FROM public.task_runs active WHERE active.status='RUNNING'
 			   AND active.leased_until>clock_timestamp() AND active.lock_key=tr.lock_key))
