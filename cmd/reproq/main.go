@@ -257,7 +257,11 @@ func runWorker(args []string) {
 	defer cancel()
 	startMemoryLogger(ctx, logger, memoryLogInterval)
 
-	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
+	openPool := db.NewPool
+	if lowMemory {
+		openPool = db.NewLowMemoryPool
+	}
+	pool, err := openPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal(err)
 	}

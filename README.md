@@ -263,7 +263,7 @@ TUI JWTs signed with `METRICS_AUTH_TOKEN` are accepted as bearer tokens for the 
 Set `METRICS_ALLOW_CIDRS` to restrict access by IP or CIDR (for example `127.0.0.1/32,10.0.0.0/8`).
 Set `METRICS_TLS_CERT` and `METRICS_TLS_KEY` (or flags) to enable HTTPS; add `METRICS_TLS_CLIENT_CA` to require mTLS.
 Unauthorized requests are rate-limited (defaults: 30/min per remote host).
-Set `LOW_MEMORY_MODE=1` to skip the metrics/health/events server and the metrics collector.
+Set `LOW_MEMORY_MODE=1` to skip the metrics/health/events server and the metrics collector. The worker also drops its PostgreSQL connection minimums and opens additional connections on demand, up to the same pool maximum.
 Set `REPROQ_MEMORY_LOG_INTERVAL=60s` to emit periodic memory stats (includes RSS on Linux).
 Set `REPROQ_PROCESS_ROLE` to label events in the `/events` stream (useful when multiple roles share a host).
 If `ALLOWED_TASK_MODULES` is unset, the worker defaults to allowing `myapp.tasks.` and `tasks.`.
