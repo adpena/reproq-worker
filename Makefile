@@ -56,7 +56,7 @@ up:
 
 test-integration: check-toolchain
 	@test -n "$$REPROQ_TEST_DATABASE_URL" || { echo "Set REPROQ_TEST_DATABASE_URL to a prepared loopback reproq_test_* database." >&2; exit 2; }
-	@REPROQ_REQUIRE_TEST_DATABASE=1 go test -count=1 -p=1 -v ./internal/queue ./cmd/reproq
+	@REPROQ_REQUIRE_TEST_DATABASE=1 go test -count=1 -p=1 -v ./internal/queue ./cmd/reproq ./internal/wakeup
 
 bench: check-toolchain
 	@test -n "$$REPROQ_TEST_DATABASE_URL" || { echo "Set REPROQ_TEST_DATABASE_URL to a prepared loopback reproq_test_* database." >&2; exit 2; }

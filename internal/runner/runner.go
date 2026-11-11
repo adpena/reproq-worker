@@ -41,6 +41,19 @@ type Runner struct {
 	wg        sync.WaitGroup
 	pool      chan struct{} // Concurrency limiter
 	queueIdx  int
+	wakeups   <-chan struct{}
+	failures  <-chan error
+}
+
+// WakeSource supplies hints and terminal listener failures, never executable work.
+type WakeSource interface {
+	Wakeups() <-chan struct{}
+	Failures() <-chan error
+}
+
+// SetWakeSource is configured before Start; polling uses nil channels.
+func (r *Runner) SetWakeSource(source WakeSource) {
+	r.wakeups, r.failures = source.Wakeups(), source.Failures()
 }
 
 type QueueService interface {
@@ -69,7 +82,32 @@ func New(cfg *config.Config, q QueueService, exec executor.IExecutor, logger *sl
 	}
 }
 
-func (r *Runner) Start(ctx context.Context) error {
+func (r *Runner) Start(ctx context.Context) (result error) {
+	ctx, cancel := context.WithCancel(ctx)
+	var listenerError error
+	var watcherDone chan struct{}
+	if r.failures != nil {
+		watcherDone = make(chan struct{})
+		go func() {
+			defer close(watcherDone)
+			select {
+			case err := <-r.failures:
+				if err == nil {
+					err = errors.New("notification source ended without a failure reason")
+				}
+				listenerError = err
+				cancel() // Also interrupts in-flight SQL and executor compatibility checks.
+			case <-ctx.Done():
+			}
+		}()
+	}
+	defer func() {
+		cancel()
+		if watcherDone != nil {
+			<-watcherDone // Synchronizes listenerError without a mutex or extra buffer.
+		}
+		result = errors.Join(result, listenerError)
+	}()
 	if err := r.executor.CheckCompatibility(ctx); err != nil {
 		return fmt.Errorf("executor startup compatibility check failed: %w", err)
 	}
@@ -126,12 +164,10 @@ func (r *Runner) Start(ctx context.Context) error {
 			idle = errors.Is(err, queue.ErrNoTasks)
 			if err != nil {
 				<-r.pool // Release slot
-				if idle {
-					r.sleep(ctx)
-					continue
+				if !idle {
+					r.logger.Error("Polling error", "error", err)
 				}
-				r.logger.Error("Polling error", "error", err)
-				r.sleep(ctx)
+				r.sleep(ctx, idle)
 				continue
 			}
 
@@ -228,15 +264,39 @@ func (r *Runner) poll(ctx context.Context) (*queue.TaskRun, error) {
 	return nil, queue.ErrNoTasks
 }
 
-func (r *Runner) sleep(ctx context.Context) {
+func (r *Runner) sleep(ctx context.Context, allowWake bool) {
+	started := time.Now()
 	backoffRange := r.cfg.PollMaxBackoff - r.cfg.PollMinBackoff
 	backoff := r.cfg.PollMinBackoff
 	if backoffRange > 0 {
 		backoff = time.Duration(rand.Int63n(int64(backoffRange))) + r.cfg.PollMinBackoff
 	}
-	select {
-	case <-time.After(backoff):
-	case <-ctx.Done():
+	wakeups := r.wakeups
+	if !allowWake {
+		wakeups = nil // Hints cannot bypass database-error backoff.
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	reason := "timer"
+	for {
+		select {
+		case <-timer.C:
+			idleWaits.WithLabelValues(reason).Inc()
+			return
+		case <-wakeups:
+			reason = "notification"
+			remaining := r.cfg.PollMinBackoff - time.Since(started)
+			if remaining <= 0 {
+				idleWaits.WithLabelValues(reason).Inc()
+				return
+			}
+			// Reuse the configured floor and this timer. Sustained broadcasts
+			// cannot turn an empty/blocked queue into an unpaced probe loop.
+			wakeups = nil
+			timer.Reset(remaining)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

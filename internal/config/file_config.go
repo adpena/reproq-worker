@@ -39,6 +39,7 @@ type WorkerFileConfig struct {
 	Concurrency            *int     `yaml:"concurrency" toml:"concurrency"`
 	PollMinBackoff         string   `yaml:"poll_min_backoff" toml:"poll_min_backoff"`
 	PollMaxBackoff         string   `yaml:"poll_max_backoff" toml:"poll_max_backoff"`
+	WaitMode               *string  `yaml:"wait_mode" toml:"wait_mode"`
 	LeaseSeconds           *int     `yaml:"lease_seconds" toml:"lease_seconds"`
 	HeartbeatSeconds       *int     `yaml:"heartbeat_seconds" toml:"heartbeat_seconds"`
 	ReclaimIntervalSeconds *int     `yaml:"reclaim_interval_seconds" toml:"reclaim_interval_seconds"`
@@ -185,6 +186,11 @@ func ApplyFileConfig(cfg *Config, fileCfg *FileConfig) error {
 	}
 	if fileCfg.Worker.Concurrency != nil {
 		cfg.MaxConcurrency = *fileCfg.Worker.Concurrency
+	}
+	if fileCfg.Worker.WaitMode != nil {
+		if err := cfg.WaitMode.Set(*fileCfg.Worker.WaitMode); err != nil {
+			return fmt.Errorf("worker.wait_mode: %w", err)
+		}
 	}
 	if fileCfg.Worker.PollMinBackoff != "" {
 		parsed, err := parseDurationField("worker.poll_min_backoff", fileCfg.Worker.PollMinBackoff)

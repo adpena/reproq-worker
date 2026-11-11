@@ -13,6 +13,7 @@ queues = ["default", "high"]
 allowed_task_modules = ["myapp.tasks.", "tasks."]
 # Use ["*"] to disable task module validation (dev only).
 concurrency = 10
+wait_mode = "poll" # notify requires a compatible Worker and PostgreSQL session endpoint.
 poll_min_backoff = "100ms"
 poll_max_backoff = "5s"
 lease_seconds = 300

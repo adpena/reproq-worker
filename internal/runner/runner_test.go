@@ -519,7 +519,7 @@ func TestSleepHandlesZeroBackoffRange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
-	r.sleep(ctx)
+	r.sleep(ctx, true)
 }
 
 func TestRunnerHandlesCancellation(t *testing.T) {

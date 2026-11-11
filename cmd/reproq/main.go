@@ -24,6 +24,7 @@ import (
 	"reproq-worker/internal/metrics"
 	"reproq-worker/internal/queue"
 	"reproq-worker/internal/runner"
+	"reproq-worker/internal/wakeup"
 	"reproq-worker/internal/web"
 )
 
@@ -329,6 +330,15 @@ func runWorker(args []string) {
 		publisher = broker
 	}
 	r := runner.New(cfg, q, exec, logger, publisher)
+	logger.Info("Queue wait mode selected", "mode", cfg.WaitMode)
+	if cfg.WaitMode == config.WaitNotify {
+		listener, err := wakeup.Open(ctx, cfg.DatabaseURL, logger)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer listener.Close()
+		r.SetWakeSource(listener)
+	}
 	if err := r.Start(ctx); err != nil {
 		log.Fatal(err)
 	}

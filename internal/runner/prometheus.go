@@ -6,6 +6,10 @@ import (
 )
 
 var (
+	idleWaits = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "reproq_idle_waits_total",
+		Help: "Completed worker waits by timer or notification",
+	}, []string{"reason"})
 	tasksClaimed = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "reproq_tasks_claimed_total",
 		Help: "Total number of tasks claimed by this worker",

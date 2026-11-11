@@ -23,6 +23,9 @@ uv run python manage.py reproq worker
 
 ## ✅ Compatibility
 
+Unreleased source also supports optional [notification-assisted waiting](docs/notification-waiting.md).
+Polling remains the default; this capability is not in published Worker 0.0.147.
+
 | Component | Supported |
 | :--- | :--- |
 | Django | 6.x via `reproq-django` |

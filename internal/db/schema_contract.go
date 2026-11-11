@@ -35,7 +35,7 @@ type contractReader interface {
 func RequireSchemaContract(ctx context.Context, connection contractReader) error {
 	var namespace string
 	if err := connection.QueryRow(ctx, "SELECT pg_catalog.current_schema()").Scan(&namespace); err != nil {
-		return fmt.Errorf("%w: namespace check: %v", ErrSchemaContract, err)
+		return fmt.Errorf("%w: namespace check: %w", ErrSchemaContract, err)
 	}
 	if namespace != "public" {
 		return fmt.Errorf("%w: only the public schema is qualified for v2", ErrSchemaContract)
@@ -47,7 +47,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 		LEFT JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 	`, contractRelationsV2)
 	if err != nil {
-		return fmt.Errorf("%w: relation check: %v", ErrSchemaContract, err)
+		return fmt.Errorf("%w: relation check: %w", ErrSchemaContract, err)
 	}
 	for rows.Next() {
 		var name string
@@ -55,7 +55,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 		var partition *bool
 		if err := rows.Scan(&name, &schema, &kind, &persistence, &partition); err != nil {
 			rows.Close()
-			return fmt.Errorf("%w: relation scan: %v", ErrSchemaContract, err)
+			return fmt.Errorf("%w: relation scan: %w", ErrSchemaContract, err)
 		}
 		if schema == nil || *schema != "public" || kind == nil || *kind != "r" ||
 			persistence == nil || *persistence != "p" || partition == nil || *partition {
@@ -65,7 +65,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("%w: relation iteration: %v", ErrSchemaContract, err)
+		return fmt.Errorf("%w: relation iteration: %w", ErrSchemaContract, err)
 	}
 	rows.Close()
 	rows, err = connection.Query(ctx, `
@@ -73,7 +73,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 		FROM public.reproq_schema_contract LIMIT 2
 	`)
 	if err != nil {
-		return fmt.Errorf("%w: marker check: %v", ErrSchemaContract, err)
+		return fmt.Errorf("%w: marker check: %w", ErrSchemaContract, err)
 	}
 	count := 0
 	for rows.Next() {
@@ -83,7 +83,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 		var raw json.RawMessage
 		if err := rows.Scan(&singleton, &version, &contract, &migration, &raw); err != nil {
 			rows.Close()
-			return fmt.Errorf("%w: marker scan: %v", ErrSchemaContract, err)
+			return fmt.Errorf("%w: marker scan: %w", ErrSchemaContract, err)
 		}
 		var capabilities []string
 		if err := json.Unmarshal(raw, &capabilities); err != nil || singleton != 1 || version != protocol.SchemaVersion ||
@@ -95,7 +95,7 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("%w: marker iteration: %v", ErrSchemaContract, err)
+		return fmt.Errorf("%w: marker iteration: %w", ErrSchemaContract, err)
 	}
 	rows.Close()
 	if count != 1 {
@@ -105,7 +105,10 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
 	if err := connection.QueryRow(ctx, `
 		SELECT count(*) FILTER(WHERE name='0002_schema_contract_v1'),count(*) FILTER(WHERE name=$1)
 		FROM public.django_migrations WHERE app='reproq_django'
-	`, protocol.SchemaMigration).Scan(&priorRecorded, &currentRecorded); err != nil || priorRecorded != 1 || currentRecorded != 1 {
+	`, protocol.SchemaMigration).Scan(&priorRecorded, &currentRecorded); err != nil {
+		return fmt.Errorf("%w: migration history check: %w", ErrSchemaContract, err)
+	}
+	if priorRecorded != 1 || currentRecorded != 1 {
 		return fmt.Errorf("%w: matching migration history is required", ErrSchemaContract)
 	}
 
@@ -119,7 +122,10 @@ func RequireSchemaContract(ctx context.Context, connection contractReader) error
       FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
       WHERE p.oid=pg_catalog.to_regprocedure('public.reproq_enqueue_periodic_occurrence(text,timestamp with time zone,text)')
     `).Scan(&language, &definer, &volatility, &parallel, &settings, &result, &bodyHash, &defaults, &arguments)
-	if err != nil || language != "plpgsql" || definer || volatility != "v" || parallel != "u" ||
+	if err != nil {
+		return fmt.Errorf("%w: periodic primitive check: %w", ErrSchemaContract, err)
+	}
+	if language != "plpgsql" || definer || volatility != "v" || parallel != "u" ||
 		!slices.Equal(settings, []string{"search_path=pg_catalog, pg_temp"}) || result != "TABLE(result_id bigint, inserted boolean)" || bodyHash != protocol.PeriodicFunctionBodySHA256 || defaults != 0 || !slices.Equal(arguments, []string{"p_name", "p_scheduled_for", "p_provider", "result_id", "inserted"}) {
 		return fmt.Errorf("%w: immutable periodic enqueue primitive is missing or incompatible", ErrSchemaContract)
 	}

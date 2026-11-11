@@ -32,6 +32,8 @@ type Config struct {
 
 	PollMaxBackoff time.Duration
 
+	WaitMode WaitMode
+
 	LeaseSeconds int
 
 	HeartbeatSeconds int
@@ -73,6 +75,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.Var(&stringSliceFlag{target: &c.AllowedTaskModules, parser: parseCommaList}, "allowed-task-modules", "Comma-separated allowed task module prefixes")
 
 	fs.IntVar(&c.MaxConcurrency, "concurrency", c.MaxConcurrency, "Max concurrent tasks")
+	fs.Var(&c.WaitMode, "wait-mode", "Idle waiting: poll|notify (notify requires session pooling)")
 
 	fs.IntVar(&c.LeaseSeconds, "lease-seconds", c.LeaseSeconds, "Lease duration")
 
@@ -114,6 +117,8 @@ func DefaultConfig() *Config {
 
 		PollMaxBackoff: 5 * time.Second,
 
+		WaitMode: WaitPoll,
+
 		LeaseSeconds: 300,
 
 		HeartbeatSeconds: 60,
@@ -144,6 +149,11 @@ func DefaultConfig() *Config {
 }
 
 func ApplyEnv(c *Config) error {
+	if value, present := os.LookupEnv("REPROQ_WAIT_MODE"); present {
+		if err := c.WaitMode.Set(value); err != nil {
+			return fmt.Errorf("REPROQ_WAIT_MODE: %w", err)
+		}
+	}
 
 	if val := os.Getenv(QueueDatabaseEnv); val != "" {
 		c.DatabaseURL = val
