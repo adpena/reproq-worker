@@ -1,6 +1,6 @@
 # Notification-assisted waiting
 
-This is an unreleased source capability. Published Worker 0.0.147 does not implement it. Polling remains the default, and this change does not enable notifications in existing deployments.
+Worker 0.0.148 and SDK 0.1.536 support this optional capability. Worker 0.0.147 does not implement it. Polling remains the default, and installing the new pair does not enable notifications in existing deployments. Source support, qualified artifacts and publication are separate release stages.
 
 ## Selecting a mode
 

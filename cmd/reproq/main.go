@@ -28,7 +28,7 @@ import (
 	"reproq-worker/internal/web"
 )
 
-const Version = "0.0.147"
+const Version = "0.0.148"
 
 func main() {
 	if len(os.Args) < 2 {

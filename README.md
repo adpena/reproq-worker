@@ -23,8 +23,8 @@ uv run python manage.py reproq worker
 
 ## ✅ Compatibility
 
-Unreleased source also supports optional [notification-assisted waiting](docs/notification-waiting.md).
-Polling remains the default; this capability is not in published Worker 0.0.147.
+Worker 0.0.148 adds optional [notification-assisted waiting](docs/notification-waiting.md).
+Polling remains the default; Worker 0.0.147 does not implement this capability.
 
 | Component | Supported |
 | :--- | :--- |
@@ -73,7 +73,7 @@ For reviewable cross-platform candidates from a clean, committed checkout:
 ```bash
 make release-build OUT=dist/candidate
 # After a separately reviewed tag already exists and identifies HEAD:
-make release-build TAG=v0.0.147 OUT=dist/tagged-candidate
+make release-build TAG=v0.0.148 OUT=dist/tagged-candidate
 ```
 
 The canonical builder produces five production binaries with `CGO_ENABLED=0`,
