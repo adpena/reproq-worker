@@ -2,11 +2,12 @@
 
 ## Current baseline
 
-[Worker v0.0.146](https://github.com/adpena/reproq-worker/releases/tag/v0.0.146)
-and [Django SDK 0.1.534](https://pypi.org/project/reproq-django/0.1.534/)
+[Worker v0.0.148](https://github.com/adpena/reproq-worker/releases/tag/v0.0.148)
+and [Django SDK 0.1.536](https://pypi.org/project/reproq-django/0.1.536/)
 are the current release pair. Pin the explicit worker tag and the platform
-artifact checksum. GitHub's Latest pointer remains at v0.0.144 for older
-SDKs. The worker uses protocol 2 and checks the schema-v2 queue
+artifact checksum; a mutable GitHub Latest pointer is not a compatibility
+selection. The SDK's installer metadata owns its default Worker pin.
+The worker uses protocol 2 and checks the schema-v2 queue
 contract before taking work. Committed Django migrations own that schema.
 The Go queue uses `REPROQ_DATABASE_URL`, and Python tasks keep their separate
 business `DATABASE_URL`. See [configuration and compatibility](../../README.md).
@@ -15,14 +16,25 @@ Worker v0.0.146 includes the expiry preview change from `98ace75`.
 `reproq prune expired --dry-run` reports candidates for finalization or
 deletion. An actual prune reports deletions.
 
-## Prepared candidate
+## Available capabilities
 
-Worker 0.0.147 prepares scoped automatic lease recovery, a read-only eligibility
+Worker 0.0.147 introduced scoped automatic lease recovery, a read-only eligibility
 probe for idle queues, and on-demand PostgreSQL connections in low memory mode.
-The candidate uses schema v2 and executor protocol 2. Qualify the tagged
-artifacts and the matching SDK before downstream promotion.
+Worker 0.0.148 and SDK 0.1.536 add optional
+[notification-assisted waiting](../notification-waiting.md). Notifications retain
+bounded recovery polling and require a dedicated PostgreSQL session; enabling
+them is not automatically a memory or query-rate reduction. Consumer activation
+and resource qualification remain separate from package availability.
 
 ## Next work
+
+The idle due-task probe does not include Claim's lock/shared-key capacity
+eligibility. During overlapping consumers, a due but key-blocked backlog can
+therefore cause a successful probe followed by an empty claim. Claim remains
+the atomic admission authority. If this path becomes material, reuse one
+nonlocking eligibility predicate in both selectors, preserve Claim's locking
+and fencing, and cover blocked keys plus independently eligible work. This is
+a DB round-trip optimization, not an established worker-memory defect.
 
 1. For the next candidate, run `make check` with the Go patch in
    `go.mod` and the pinned linter. Run `make test-integration` against an owned
