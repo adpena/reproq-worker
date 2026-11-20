@@ -28,13 +28,12 @@ and resource qualification remain separate from package availability.
 
 ## Next work
 
-The idle due-task probe does not include Claim's lock/shared-key capacity
-eligibility. During overlapping consumers, a due but key-blocked backlog can
-therefore cause a successful probe followed by an empty claim. Claim remains
-the atomic admission authority. If this path becomes material, reuse one
-nonlocking eligibility predicate in both selectors, preserve Claim's locking
-and fencing, and cover blocked keys plus independently eligible work. This is
-a DB round-trip optimization, not an established worker-memory defect.
+The next Worker source update checks live shared-key capacity in both the
+read-only idle probe and Claim. A backlog blocked by a committed lease can
+skip the empty claim transaction. Claim still acquires advisory locks and
+rechecks capacity before taking work. The existing polling bounds cover
+completion, expiry and missed notifications. Measure this on overlapping
+consumers before assigning any capacity benefit to an application rollout.
 
 1. For the next candidate, run `make check` with the Go patch in
    `go.mod` and the pinned linter. Run `make test-integration` against an owned

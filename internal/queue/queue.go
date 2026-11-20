@@ -51,6 +51,15 @@ func concurrencyCapacitySQL(keyExpression, limitExpression string) string {
         AND active.leased_until>clock_timestamp() AND active.concurrency_key=%[1]s))`, keyExpression, limitExpression)
 }
 
+// The unlocked probe and Claim's initial scan use the same visible key rules.
+// Claim still rechecks them after the advisory locks in a fresh statement.
+func availableClaimKeysSQL(lock, key, limit string) string {
+	return fmt.Sprintf(`(%[1]s IS NULL OR %[1]s='' OR NOT EXISTS(
+		SELECT 1 FROM public.task_runs active WHERE active.status='RUNNING'
+		AND active.leased_until>clock_timestamp() AND active.lock_key=%[1]s)) AND `, lock) +
+		concurrencyCapacitySQL(key, limit)
+}
+
 type Service struct {
 	pool *pgxpool.Pool
 }
@@ -71,7 +80,9 @@ func NewService(ctx context.Context, pool *pgxpool.Pool) (*Service, error) {
 func (s *Service) HasDueTasks(ctx context.Context, queues []string) (bool, error) {
 	var due bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.task_runs tr
-		WHERE tr.queue_name=ANY($1::text[]) AND `+dueReadyPredicate+` AND `+unpausedQueueSQL("tr.queue_name")+`)`, queues).Scan(&due)
+		WHERE tr.queue_name=ANY($1::text[]) AND `+dueReadyPredicate+` AND `+
+		unpausedQueueSQL("tr.queue_name")+` AND `+
+		availableClaimKeysSQL("tr.lock_key", "tr.concurrency_key", "tr.concurrency_limit")+`)`, queues).Scan(&due)
 	return due, err
 }
 
@@ -105,10 +116,7 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 			WHERE tr.queue_name=$1 AND `+dueReadyPredicate+`
 			 AND NOT (tr.result_id=ANY($3::bigint[]))
 			 AND `+unpausedQueueSQL("$1")+`
-			 AND (tr.lock_key IS NULL OR tr.lock_key='' OR NOT EXISTS(
-			  SELECT 1 FROM public.task_runs active WHERE active.status='RUNNING'
-			   AND active.leased_until>clock_timestamp() AND active.lock_key=tr.lock_key))
-			 AND `+concurrencyCapacitySQL("tr.concurrency_key", "tr.concurrency_limit")+`
+			 AND `+availableClaimKeysSQL("tr.lock_key", "tr.concurrency_key", "tr.concurrency_limit")+`
 			ORDER BY CASE WHEN $2::double precision>0 THEN tr.priority+
 			 GREATEST(EXTRACT(EPOCH FROM(clock_timestamp()-tr.enqueued_at)),0)/NULLIF($2,0)
 			 ELSE tr.priority END DESC,tr.enqueued_at,tr.result_id
@@ -147,10 +155,8 @@ func (s *Service) Claim(ctx context.Context, workerID string, queueName string, 
 		if eligible {
 			// This statement begins after the key locks, so it sees any prior
 			// claimant that committed while the candidate was being selected.
-			err = tx.QueryRow(ctx, `
-			 SELECT ($1::text IS NULL OR $1='' OR NOT EXISTS(
-			  SELECT 1 FROM public.task_runs WHERE status='RUNNING' AND leased_until>clock_timestamp() AND lock_key=$1))
-			 AND `+concurrencyCapacitySQL("$2::text", "$3::integer"), lockKey, concurrencyKey, concurrencyLimit).Scan(&eligible)
+			err = tx.QueryRow(ctx, `SELECT `+availableClaimKeysSQL("$1::text", "$2::text", "$3::integer"),
+				lockKey, concurrencyKey, concurrencyLimit).Scan(&eligible)
 			if err != nil {
 				return nil, err
 			}

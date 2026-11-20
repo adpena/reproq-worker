@@ -56,6 +56,50 @@ func TestHasDueTasksUsesClaimTimeAndQueueFilters(t *testing.T) {
 	}
 }
 
+func TestHasDueTasksSkipsLiveSharedKeyHoldersAcrossQueues(t *testing.T) {
+	for _, mode := range []string{"lock", "concurrency"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, pool, service, selected := ownedFencedQueue(t)
+			_, _, _, other := ownedFencedQueue(t)
+			var lock, concurrency *string
+			if mode == "lock" {
+				lock = &selected
+			} else {
+				concurrency = &selected
+			}
+			holderID := insertFencedFixture(t, pool, other, 0, lock, concurrency, 1)
+			holder, err := service.Claim(ctx, "key-holder", other, 60, 0)
+			if err != nil || holder == nil || holder.ResultID != holderID {
+				t.Fatalf("claim holder = %v, %v", holder, err)
+			}
+			// A queued row with no individual cap still obeys the holder's cap.
+			blocked := insertFencedFixture(t, pool, selected, 0, lock, concurrency, 0)
+			if due, err := service.HasDueTasks(ctx, []string{selected}); err != nil || due {
+				t.Fatalf("blocked work reported due = %t, %v", due, err)
+			}
+			if task, err := service.Claim(ctx, "next-worker", selected, 60, 0); !errors.Is(err, ErrNoTasks) || task != nil {
+				t.Fatalf("claim while held = %v, %v", task, err)
+			}
+			runnable := insertFencedFixture(t, pool, selected, 1, nil, nil, 0)
+			if due, err := service.HasDueTasks(ctx, []string{selected}); err != nil || !due {
+				t.Fatalf("unrelated work reported due = %t, %v", due, err)
+			}
+			if task, err := service.Claim(ctx, "next-worker", selected, 60, 0); err != nil || task == nil || task.ResultID != runnable {
+				t.Fatalf("claim unrelated work = %v, %v", task, err)
+			}
+			if _, err := pool.Exec(ctx, "UPDATE public.task_runs SET leased_until=clock_timestamp()-interval '1 second' WHERE result_id=$1", holderID); err != nil {
+				t.Fatal(err)
+			}
+			if due, err := service.HasDueTasks(ctx, []string{selected}); err != nil || !due {
+				t.Fatalf("work after holder expiry reported due = %t, %v", due, err)
+			}
+			if task, err := service.Claim(ctx, "next-worker", selected, 60, 0); err != nil || task == nil || task.ResultID != blocked {
+				t.Fatalf("claim after holder expiry = %v, %v", task, err)
+			}
+		})
+	}
+}
+
 func TestQueueIntegration(t *testing.T) {
 	dsn := testdatabase.URL(t)
 
