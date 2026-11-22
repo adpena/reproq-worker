@@ -2,11 +2,11 @@
 
 ## Current baseline
 
-[Worker v0.0.148](https://github.com/adpena/reproq-worker/releases/tag/v0.0.148)
+[Worker v0.0.149](https://github.com/adpena/reproq-worker/releases/tag/v0.0.149)
 and [Django SDK 0.1.536](https://pypi.org/project/reproq-django/0.1.536/)
-are the current release pair. Pin the explicit worker tag and the platform
-artifact checksum; a mutable GitHub Latest pointer is not a compatibility
-selection. The SDK's installer metadata owns its default Worker pin.
+are qualified together in the TEA Data app. SDK 0.1.536 defaults to v0.0.148.
+Use the explicit v0.0.149 tag and the platform artifact checksum for that
+pair. The SDK's installer metadata owns its default Worker pin.
 The worker uses protocol 2 and checks the schema-v2 queue
 contract before taking work. Committed Django migrations own that schema.
 The Go queue uses `REPROQ_DATABASE_URL`, and Python tasks keep their separate
@@ -26,14 +26,18 @@ bounded recovery polling and require a dedicated PostgreSQL session; enabling
 them is not automatically a memory or query-rate reduction. Consumer activation
 and resource qualification remain separate from package availability.
 
+Worker 0.0.149 checks live shared-key capacity in both the read-only idle probe
+and Claim. A backlog blocked by a committed lease can
+skip the empty claim transaction. Claim still acquires advisory locks and
+rechecks capacity before taking work. The polling bounds cover completion,
+expiry and missed notifications.
+
 ## Next work
 
-The next Worker source update checks live shared-key capacity in both the
-read-only idle probe and Claim. A backlog blocked by a committed lease can
-skip the empty claim transaction. Claim still acquires advisory locks and
-rechecks capacity before taking work. The existing polling bounds cover
-completion, expiry and missed notifications. Measure this on overlapping
-consumers before assigning any capacity benefit to an application rollout.
+Compare bounded polling and notification-assisted waiting on otherwise
+identical workloads. Record queue delay, empty claims, database connections,
+idle memory and recovery after missed notifications. Include overlapping
+consumers and shared task keys before assigning a performance benefit.
 
 1. For the next candidate, run `make check` with the Go patch in
    `go.mod` and the pinned linter. Run `make test-integration` against an owned
